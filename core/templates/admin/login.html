@@ -1,0 +1,254 @@
+{% extends "admin/login.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+    :root {
+        --primary: #8b5cf6;
+        --accent: #0ea5e9;
+        --bg-main: #0b0f19;
+        --bg-card: rgba(15, 23, 42, 0.8);
+        --text-title: #f8fafc;
+        --text-body: #cbd5e1;
+        --border: rgba(255, 255, 255, 0.08);
+    }
+
+    body {
+        background-color: var(--bg-main) !important;
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.15) 0px, transparent 50%),
+            radial-gradient(at 100% 100%, rgba(14, 165, 233, 0.15) 0px, transparent 50%) !important;
+        background-attachment: fixed;
+        font-family: 'Outfit', sans-serif !important;
+        color: var(--text-body) !important;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+    }
+
+    #container {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        width: 100% !important;
+        max-width: 440px !important;
+        margin: 0 !important;
+    }
+
+    #header {
+        background: transparent !important;
+        color: var(--text-title) !important;
+        padding: 0 !important;
+        margin-bottom: 1rem !important;
+        text-align: center !important;
+        height: auto !important;
+    }
+
+    /* Custom Logo Styling */
+    .admin-logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.75rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .admin-logo i {
+        font-size: 2.5rem;
+        background: linear-gradient(135deg, var(--primary), var(--accent));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        filter: drop-shadow(0 0 12px rgba(139, 92, 246, 0.6));
+    }
+
+    .admin-logo span {
+        font-size: 2.25rem;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+        background: linear-gradient(to right, #ffffff, #94a3b8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    #content {
+        padding: 0 !important;
+    }
+
+    #content-main {
+        background: var(--bg-card) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
+        padding: 2.5rem !important;
+        border-radius: 28px !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        box-shadow: 
+            0 25px 50px -12px rgba(0, 0, 0, 0.6),
+            inset 0 0 20px rgba(255, 255, 255, 0.02) !important;
+        width: 100% !important;
+        margin: 0 !important;
+    }
+
+    .login .form-row {
+        padding: 1.25rem 0 !important;
+        border: none !important;
+    }
+
+    .login label {
+        color: var(--text-body) !important;
+        font-weight: 600 !important;
+        font-size: 0.875rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        margin-bottom: 0.75rem !important;
+        display: block !important;
+        float: none !important;
+        width: auto !important;
+    }
+
+    input[type="text"], input[type="password"] {
+        width: 100% !important;
+        padding: 1rem 1.25rem !important;
+        border-radius: 14px !important;
+        background: rgba(0, 0, 0, 0.3) !important;
+        border: 1px solid var(--border) !important;
+        color: white !important;
+        box-sizing: border-box !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        font-family: 'Outfit', sans-serif !important;
+        font-size: 1rem !important;
+    }
+
+    input[type="text"]:focus, input[type="password"]:focus {
+        border-color: var(--primary) !important;
+        background: rgba(0, 0, 0, 0.4) !important;
+        box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.15) !important;
+        outline: none !important;
+    }
+
+    .submit-row {
+        background: transparent !important;
+        padding: 2rem 0 0 0 !important;
+        border: none !important;
+        margin: 0 !important;
+        text-align: center !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 1.5rem !important;
+    }
+
+    .submit-row input[type="submit"] {
+        width: 100% !important;
+        height: auto !important;
+        padding: 1.125rem !important;
+        border-radius: 14px !important;
+        background: linear-gradient(135deg, var(--primary), #7c3aed) !important;
+        color: white !important;
+        font-weight: 700 !important;
+        font-size: 1.1rem !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        cursor: pointer !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        box-shadow: 0 10px 25px rgba(139, 92, 246, 0.4) !important;
+        text-transform: none !important;
+    }
+
+    .back-link {
+        color: #94a3b8 !important;
+        text-decoration: none !important;
+        font-size: 0.9rem !important;
+        font-weight: 500 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.5rem !important;
+        transition: all 0.3s !important;
+    }
+
+    .back-link:hover {
+        color: white !important;
+        transform: translateX(-4px);
+    }
+
+    .submit-row input[type="submit"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 15px 35px rgba(139, 92, 246, 0.5) !important;
+        filter: brightness(1.1);
+    }
+
+    .submit-row input[type="submit"]:active {
+        transform: translateY(0);
+    }
+
+    #branding h1 { display: none !important; }
+
+    .errornote {
+        background: rgba(239, 68, 68, 0.1) !important;
+        border: 1px solid rgba(239, 68, 68, 0.2) !important;
+        color: #f87171 !important;
+        border-radius: 14px !important;
+        padding: 1.25rem !important;
+        margin-bottom: 2rem !important;
+        font-size: 0.9rem !important;
+        text-align: center !important;
+    }
+
+    .footer, #footer { display: none !important; }
+</style>
+{% endblock %}
+
+{% block branding %}
+<div class="admin-logo">
+    <i class="fa-solid fa-bolt-lightning"></i>
+    <span>GS Bulk Admin</span>
+</div>
+{% endblock %}
+
+{% block content %}
+{% if form.errors and not form.non_field_errors %}
+<p class="errornote">
+{% if form.errors.items|length == 1 %}{% translate "Please correct the error below." %}{% else %}{% translate "Please correct the errors below." %}{% endif %}
+</p>
+{% endif %}
+
+{% if form.non_field_errors %}
+{% for error in form.non_field_errors %}
+<p class="errornote">
+    {{ error }}
+</p>
+{% endfor %}
+{% endif %}
+
+<div id="content-main">
+<form action="{{ app_path }}" method="post" id="login-form">{% csrf_token %}
+  <div class="form-row">
+    {{ form.username.errors }}
+    {{ form.username.label_tag }} {{ form.username }}
+  </div>
+  <div class="form-row">
+    {{ form.password.errors }}
+    {{ form.password.label_tag }} {{ form.password }}
+    <input type="hidden" name="next" value="{{ next }}">
+  </div>
+  {% url 'admin_password_reset' as password_reset_url %}
+  {% if password_reset_url %}
+  <div class="password-reset-link">
+    <a href="{{ password_reset_url }}">{% translate 'Forgotten your password or username?' %}</a>
+  </div>
+  {% endif %}
+  <div class="submit-row">
+    <input type="submit" value="{% translate 'Log in' %}">
+    <a href="/" class="back-link">
+        <i class="fa-solid fa-arrow-left"></i>
+        Back to Dashboard
+    </a>
+  </div>
+</form>
+</div>
+{% endblock %}
+

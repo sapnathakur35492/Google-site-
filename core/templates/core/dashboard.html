@@ -1,0 +1,192 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Dashboard | GS Bulk Creator{% endblock %}
+{% block header_title %}Batch Dashboard{% endblock %}
+
+{% block header_actions %}
+<a href="/upload/" class="btn btn-primary">
+    <i class="fa-solid fa-plus"></i>
+    New Bulk Batch
+</a>
+{% endblock %}
+
+{% block content %}
+<!-- Stats Overview -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-bottom: 2.5rem;">
+    <div class="card" style="padding: 1.5rem; display: flex; align-items: center; gap: 1.25rem;">
+        <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; box-shadow: inset 0 0 10px rgba(59, 130, 246, 0.2);">
+            <i class="fa-solid fa-layer-group"></i>
+        </div>
+        <div>
+            <p style="font-size: 0.875rem; color: #94a3b8; font-weight: 500;">Total Batches</p>
+            <h3 style="font-size: 1.5rem; font-weight: 700; color: #f8fafc;">{{ batches.count }}</h3>
+        </div>
+    </div>
+    <div class="card" style="padding: 1.5rem; display: flex; align-items: center; gap: 1.25rem;">
+        <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; box-shadow: inset 0 0 10px rgba(16, 185, 129, 0.2);">
+            <i class="fa-solid fa-circle-check"></i>
+        </div>
+        <div>
+            <p style="font-size: 0.875rem; color: #94a3b8; font-weight: 500;">Sites Created</p>
+            <h3 style="font-size: 1.5rem; font-weight: 700; color: #f8fafc;">{{ total_sites_created }}</h3>
+        </div>
+    </div>
+    <div class="card" style="padding: 1.5rem; display: flex; align-items: center; gap: 1.25rem;">
+        <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; box-shadow: inset 0 0 10px rgba(245, 158, 11, 0.2);">
+            {% if active_jobs > 0 %}
+            <i class="fa-solid fa-spinner fa-spin"></i>
+            {% else %}
+            <i class="fa-solid fa-check-double"></i>
+            {% endif %}
+        </div>
+        <div>
+            <p style="font-size: 0.875rem; color: #94a3b8; font-weight: 500;">Active Jobs</p>
+            <h3 style="font-size: 1.5rem; font-weight: 700; color: #f8fafc;">{{ active_jobs }}</h3>
+        </div>
+    </div>
+</div>
+
+<!-- Batches Table -->
+<div class="card" style="padding: 0; overflow: hidden;">
+    <div style="padding: 1.5rem 2rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="font-size: 1.125rem; font-weight: 600;">Recent Batches</h2>
+    </div>
+    
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Batch Info</th>
+                    <th>Created At</th>
+                    <th>Status</th>
+                    <th>Progress</th>
+                    <th style="text-align: right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for batch in batches %}
+                <tr>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <div style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #a78bfa; font-size: 0.75rem;">
+                                #{{ batch.id }}
+                            </div>
+                            <div>
+                                <p style="font-weight: 600; font-size: 0.875rem; color: #f8fafc;">Batch Execution</p>
+                                <p style="font-size: 0.75rem; color: #94a3b8;">{{ batch.total_sites }} sites defined</p>
+                            </div>
+                        </div>
+                    </td>
+                    <td>
+                        <p style="font-size: 0.875rem; color: #cbd5e1;">{{ batch.created_at|date:"M d, Y" }}</p>
+                        <p style="font-size: 0.75rem; color: #94a3b8;">{{ batch.created_at|date:"H:i A" }}</p>
+                    </td>
+                    <td>
+                        <span class="badge badge-{{ batch.status }}">
+                            {% if batch.status == 'processing' %}
+                            <i class="fa-solid fa-spinner fa-spin" style="font-size: 6px; margin-right: 6px;"></i>
+                            {% else %}
+                            <i class="fa-solid fa-circle" style="font-size: 6px; margin-right: 6px;"></i>
+                            {% endif %}
+                            {{ batch.status }}
+                        </span>
+                    </td>
+                    <td style="width: 240px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 4px;">
+                            <span>{{ batch.completed_sites }} of {{ batch.total_sites }} success</span>
+                            <span style="font-weight: 600; color: var(--primary);">
+                                {{ batch.progress_percentage }}%
+                            </span>
+                        </div>
+                        <div class="progress-wrapper">
+                            <div class="progress-bar" style="width: {{ batch.progress_percentage }}%"></div>
+                        </div>
+                    </td>
+                    <td style="text-align: right;">
+                        <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+                            <a href="/batch/{{ batch.id }}/" class="btn btn-secondary" style="padding: 0.5rem 0.75rem;">
+                                <i class="fa-solid fa-eye"></i>
+                            </a>
+                            <form id="clearForm-{{ batch.id }}" action="/batch/{{ batch.id }}/reset/" method="POST" style="display: inline;">
+                                {% csrf_token %}
+                                <button type="button" onclick="showClearModal({{ batch.id }})" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.8125rem; color: #f87171; border-color: rgba(239, 68, 68, 0.3);">
+                                    <i class="fa-solid fa-rotate-left"></i> Clear
+                                </button>
+                            </form>
+                            {% if batch.status == 'pending' or batch.status == 'failed' or batch.status == 'completed' %}
+                            <form action="/batch/{{ batch.id }}/start/" method="POST" style="display: inline;">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-primary" style="padding: 0.5rem 1rem; font-size: 0.8125rem;">
+                                    Run
+                                </button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% if not batches %}
+    <div style="padding: 4rem 2rem; text-align: center;">
+        <div style="font-size: 3rem; color: #e2e8f0; margin-bottom: 1.5rem;">
+            <i class="fa-solid fa-folder-open"></i>
+        </div>
+        <h3 style="color: #f8fafc; margin-bottom: 0.5rem;">No batches found</h3>
+        <p style="color: #94a3b8; margin-bottom: 2rem;">Upload your first file to get started with bulk site creation.</p>
+        <a href="/upload/" class="btn btn-primary">
+            <i class="fa-solid fa-plus"></i> Create Your First Batch
+        </a>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Custom Confirmation Modal -->
+<div id="customClearModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); z-index: 1000; justify-content: center; align-items: center;">
+    <div style="background: var(--bg-card); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; width: 400px; padding: 2rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); text-align: center; animation: modalPop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+        <div style="width: 64px; height: 64px; border-radius: 50%; background: rgba(239, 68, 68, 0.1); color: #f87171; font-size: 2rem; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem;">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <h3 style="color: #f8fafc; font-size: 1.25rem; font-weight: 700; margin-bottom: 0.75rem;">Reset Batch Progress?</h3>
+        <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 2rem; line-height: 1.5;">Are you sure you want to clear this batch? All current progress will be lost and set back to 0.</p>
+        <div style="display: flex; gap: 1rem; justify-content: center;">
+            <button onclick="hideClearModal()" class="btn btn-secondary" style="flex: 1; padding: 0.75rem;">Cancel</button>
+            <button id="confirmClearBtn" class="btn btn-primary" style="flex: 1; padding: 0.75rem; background: #ef4444; border-color: #ef4444; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);">Yes, Reset</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    @keyframes modalPop {
+        from { transform: scale(0.8); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+    }
+</style>
+
+<script>
+    let currentBatchToClear = null;
+    
+    function showClearModal(batchId) {
+        currentBatchToClear = batchId;
+        const modal = document.getElementById('customClearModal');
+        modal.style.display = 'flex';
+    }
+    
+    function hideClearModal() {
+        const modal = document.getElementById('customClearModal');
+        modal.style.display = 'none';
+        currentBatchToClear = null;
+    }
+    
+    document.getElementById('confirmClearBtn').addEventListener('click', function() {
+        if (currentBatchToClear) {
+            this.disabled = true;
+            this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Resetting...';
+            document.getElementById('clearForm-' + currentBatchToClear).submit();
+        }
+    });
+</script>
+
+{% endblock %}

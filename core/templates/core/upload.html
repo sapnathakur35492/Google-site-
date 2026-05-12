@@ -1,0 +1,202 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Upload New Batch | GS Bulk Creator{% endblock %}
+{% block header_title %}New Site Creation Batch{% endblock %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 0 auto;">
+    <div class="card" style="padding: 3rem;">
+        <div style="text-align: center; margin-bottom: 2.5rem;">
+            <div style="width: 64px; height: 64px; border-radius: 20px; background: rgba(139, 92, 246, 0.15); color: var(--primary-light); display: flex; align-items: center; justify-content: center; font-size: 1.75rem; margin: 0 auto 1.5rem; box-shadow: inset 0 0 15px rgba(139, 92, 246, 0.2);">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+            </div>
+            <h2 style="font-size: 1.5rem; font-weight: 700; color: var(--text-title); margin-bottom: 0.5rem;">Upload Source File</h2>
+            <p style="color: var(--text-muted); font-size: 1rem;">Import your .xlsx or .csv file to create Google Sites in bulk</p>
+        </div>
+
+        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+            {% csrf_token %}
+            
+            <div id="dropZone" style="border: 2px dashed rgba(255, 255, 255, 0.2); border-radius: 16px; padding: 4rem 2rem; text-align: center; cursor: pointer; transition: all 0.3s; background: rgba(0, 0, 0, 0.2);">
+                <input type="file" name="file" id="fileInput" accept=".csv, .xlsx" required style="display: none;">
+                <div id="uploadContent">
+                    <i class="fa-solid fa-file-excel" style="font-size: 2.5rem; color: #64748b; margin-bottom: 1rem;"></i>
+                    <p style="font-weight: 600; color: var(--text-title); margin-bottom: 0.25rem;">Click to upload or drag and drop</p>
+                    <p style="font-size: 0.8125rem; color: var(--text-muted);">XLSX or CSV (max. 10MB)</p>
+                </div>
+                <div id="fileInfo" style="display: none;">
+                    <i class="fa-solid fa-file-circle-check" style="font-size: 2.5rem; color: #34d399; margin-bottom: 1rem;"></i>
+                    <p id="fileName" style="font-weight: 600; color: var(--text-title);"></p>
+                    <p id="fileSize" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;"></p>
+                    <p style="font-size: 0.8125rem; color: var(--primary-light); cursor: pointer; margin-top: 0.75rem;" onclick="resetFile(event)">
+                        <i class="fa-solid fa-arrows-rotate"></i> Change file
+                    </p>
+                </div>
+            </div>
+
+            <!-- File Preview Area (shown after file is selected) -->
+            <div id="previewArea" style="display: none; margin-top: 2rem;">
+                <div style="background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.05); padding: 1.5rem; border-radius: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                        <h4 style="font-size: 0.875rem; font-weight: 700; color: var(--text-title); display: flex; align-items: center; gap: 0.5rem;">
+                            <i class="fa-solid fa-table-cells" style="color: var(--primary-light);"></i>
+                            Detected Columns
+                        </h4>
+                        <span id="previewCount" style="font-size: 0.75rem; font-weight: 700; color: var(--accent); background: rgba(14, 165, 233, 0.15); padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid rgba(14, 165, 233, 0.3);"></span>
+                    </div>
+                    <div id="columnsList" style="display: flex; flex-wrap: wrap; gap: 0.5rem;"></div>
+                </div>
+            </div>
+
+            <div style="margin-top: 2.5rem; display: flex; justify-content: flex-end; gap: 1rem;">
+                <a href="/" class="btn btn-secondary">Cancel</a>
+                <button type="submit" id="submitBtn" class="btn btn-primary" style="padding-left: 2rem; padding-right: 2rem;">
+                    <i class="fa-solid fa-rocket"></i>
+                    Analyze and Import
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadContent = document.getElementById('uploadContent');
+    const fileInfo = document.getElementById('fileInfo');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+    const previewArea = document.getElementById('previewArea');
+    const columnsList = document.getElementById('columnsList');
+    const previewCount = document.getElementById('previewCount');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+        if (fileInput.files.length > 0) {
+            showFile(fileInput.files[0]);
+        }
+    });
+
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.style.borderColor = 'var(--primary)';
+        dropZone.style.background = 'rgba(139, 92, 246, 0.1)';
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+        dropZone.style.background = 'rgba(0, 0, 0, 0.2)';
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            showFile(e.dataTransfer.files[0]);
+        }
+    });
+
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function showFile(file) {
+        uploadContent.style.display = 'none';
+        fileInfo.style.display = 'block';
+        fileName.textContent = file.name;
+        fileSize.textContent = formatFileSize(file.size);
+        dropZone.style.borderColor = 'var(--accent)';
+        dropZone.style.background = 'rgba(14, 165, 233, 0.1)';
+
+        // Read columns from file using SheetJS (for .xlsx)
+        if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+            readExcelColumns(file);
+        } else if (file.name.endsWith('.csv')) {
+            readCsvColumns(file);
+        }
+    }
+
+    function readExcelColumns(file) {
+        // Use a lightweight approach: read first few bytes using FileReader
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                // We'll parse using a simple CSV fallback for preview
+                // For full parsing we use the backend, but show a "loading" state
+                showPreviewLoading();
+            } catch (err) {
+                console.error(err);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+        
+        // Show a loading preview since we can't parse xlsx client-side without a library
+        showPreviewLoading();
+    }
+
+    function readCsvColumns(file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const text = e.target.result;
+            const firstLine = text.split('\n')[0];
+            const totalLines = text.split('\n').filter(l => l.trim()).length - 1;
+            const cols = firstLine.split(',').map(c => c.trim().replace(/"/g, ''));
+            displayColumns(cols, totalLines);
+        };
+        reader.readAsText(file);
+    }
+
+    function showPreviewLoading() {
+        previewArea.style.display = 'block';
+        previewArea.style.animation = 'slideUp 0.3s ease forwards';
+        columnsList.innerHTML = '';
+        previewCount.textContent = 'Columns will be detected on import';
+        
+        const cols = ['Keyword', 'Title', 'Content'];
+        cols.forEach(col => {
+            const tag = document.createElement('span');
+            tag.style.cssText = 'display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.85rem; border-radius: 8px; font-size: 0.8125rem; font-weight: 600; background: rgba(139, 92, 246, 0.12); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.25);';
+            tag.innerHTML = '<i class="fa-solid fa-table-columns" style="font-size: 0.7rem;"></i> ' + col;
+            columnsList.appendChild(tag);
+        });
+        
+        previewCount.textContent = 'Expected format';
+    }
+
+    function displayColumns(cols, rowCount) {
+        previewArea.style.display = 'block';
+        previewArea.style.animation = 'slideUp 0.3s ease forwards';
+        columnsList.innerHTML = '';
+        previewCount.textContent = rowCount + ' records found';
+        
+        cols.forEach(col => {
+            const tag = document.createElement('span');
+            tag.style.cssText = 'display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.85rem; border-radius: 8px; font-size: 0.8125rem; font-weight: 600; background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25);';
+            tag.innerHTML = '<i class="fa-solid fa-check" style="font-size: 0.7rem;"></i> ' + col;
+            columnsList.appendChild(tag);
+        });
+    }
+
+    function resetFile(e) {
+        e.stopPropagation();
+        fileInput.value = '';
+        uploadContent.style.display = 'block';
+        fileInfo.style.display = 'none';
+        previewArea.style.display = 'none';
+        dropZone.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+        dropZone.style.background = 'rgba(0, 0, 0, 0.2)';
+    }
+
+    // Submit button loading state
+    document.getElementById('uploadForm').addEventListener('submit', function() {
+        const btn = document.getElementById('submitBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Importing...';
+    });
+</script>
+{% endblock %}

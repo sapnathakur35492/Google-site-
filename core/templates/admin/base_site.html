@@ -1,0 +1,132 @@
+{% extends "admin/base.html" %}
+
+{% block extrastyle %}
+{{ block.super }}
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<style>
+    :root {
+        --primary: #8b5cf6;
+        --accent: #0ea5e9;
+        --bg-main: #0b0f19;
+        --bg-card: rgba(15, 23, 42, 0.7);
+        --text-title: #f8fafc;
+        --text-body: #cbd5e1;
+        --border: rgba(255, 255, 255, 0.08);
+    }
+
+    body {
+        background-color: var(--bg-main) !important;
+        font-family: 'Outfit', sans-serif !important;
+        color: var(--text-body) !important;
+    }
+
+    #header {
+        background: rgba(15, 23, 42, 0.8) !important;
+        backdrop-filter: blur(12px) !important;
+        border-bottom: 1px solid var(--border) !important;
+        padding: 0.75rem 2rem !important;
+        height: auto !important;
+    }
+
+    #branding {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    #branding h1 {
+        font-weight: 800 !important;
+        letter-spacing: -0.03em !important;
+        font-size: 1.25rem !important;
+        margin: 0 !important;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    #branding h1 i {
+        color: var(--primary);
+        filter: drop-shadow(0 0 5px rgba(139, 92, 246, 0.5));
+    }
+
+    #branding h1 a {
+        color: white !important;
+        background: linear-gradient(135deg, var(--primary), var(--accent));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .module h2, .module caption, .inline-group h2 {
+        background: rgba(139, 92, 246, 0.1) !important;
+        color: var(--primary) !important;
+        border-radius: 8px 8px 0 0 !important;
+    }
+
+    div.breadcrumbs {
+        background: transparent !important;
+        border: none !important;
+        color: #64748b !important;
+        padding: 1rem 2rem !important;
+    }
+
+    #content {
+        padding: 2rem !important;
+    }
+
+    #content h1 {
+        color: var(--text-title) !important;
+        font-weight: 700 !important;
+    }
+
+    .module {
+        background: var(--bg-card) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 16px !important;
+        overflow: hidden !important;
+    }
+
+    table thead th {
+        background: rgba(255, 255, 255, 0.03) !important;
+        color: #94a3b8 !important;
+        text-transform: uppercase !important;
+        font-size: 0.75rem !important;
+        letter-spacing: 0.05em !important;
+    }
+
+    tr.row1, tr.row2 {
+        background: transparent !important;
+    }
+
+    tr:hover {
+        background: rgba(255, 255, 255, 0.02) !important;
+    }
+
+    input, select, textarea {
+        background: rgba(15, 23, 42, 0.5) !important;
+        border: 1px solid var(--border) !important;
+        color: white !important;
+        border-radius: 8px !important;
+    }
+
+    .button, input[type=submit], input[type=button], .submit-row input, a.button {
+        background: var(--primary) !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+    }
+
+    #footer {
+        display: none !important;
+    }
+</style>
+{% endblock %}
+
+{% block branding %}
+<h1 id="site-name">
+    <i class="fa-solid fa-bolt-lightning"></i>
+    <a href="{% url 'admin:index' %}">GS Bulk Admin</a>
+</h1>
+{% endblock %}
+
+{% block nav-global %}{% endblock %}

@@ -1,0 +1,315 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Batch #{{ batch.id }} Details | GS Bulk Creator{% endblock %}
+{% block header_title %}Execution Details{% endblock %}
+
+{% block header_actions %}
+<div style="display: flex; gap: 0.75rem;">
+    <form id="clearForm-{{ batch.id }}" action="/batch/{{ batch.id }}/reset/" method="POST">
+        {% csrf_token %}
+        <button type="button" onclick="showClearModal({{ batch.id }})" class="btn btn-secondary" style="color: #f87171; border-color: rgba(239, 68, 68, 0.3);">
+            <i class="fa-solid fa-rotate-left"></i> Clear Progress
+        </button>
+    </form>
+    {% if batch.status == 'completed' or batch.status == 'failed' %}
+    <form action="/batch/{{ batch.id }}/retry/" method="POST" style="display: inline;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary" style="color: #fbbf24; border-color: rgba(245, 158, 11, 0.3);" id="retryBtn">
+            <i class="fa-solid fa-arrows-rotate"></i> Retry Failed
+        </button>
+    </form>
+    {% endif %}
+    {% if batch.status == 'pending' or batch.status == 'failed' or batch.status == 'completed' %}
+    <form action="/batch/{{ batch.id }}/start/" method="POST">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-play"></i> Start Automation
+        </button>
+    </form>
+    {% endif %}
+    <a href="/batch/{{ batch.id }}/export/" class="btn btn-secondary">
+        <i class="fa-solid fa-download"></i> Export Results
+    </a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 2rem; align-items: start;">
+    
+    <!-- Left Column: Entries List -->
+    <div class="card" style="padding: 0;">
+        <div style="padding: 1.5rem 2rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+            <h2 style="font-size: 1.125rem; font-weight: 600;">Site Entries (<span id="entriesCount">{{ entries.count }}</span>)</h2>
+            <div style="position: relative;">
+                <i class="fa-solid fa-magnifying-glass" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.8125rem;"></i>
+                <input type="text" id="searchInput" placeholder="Search title or slug..." 
+                    style="padding: 0.5rem 1rem 0.5rem 2.25rem; border-radius: 8px; border: 1px solid var(--border); font-size: 0.8125rem; width: 240px;">
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table id="entriesTable">
+                <thead>
+                    <tr>
+                        <th>Title & Slug</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="entriesBody">
+                    {% for entry in entries %}
+                    <tr data-entry-id="{{ entry.id }}">
+                        <td>
+                            <p style="font-weight: 600; font-size: 0.875rem; color: #f8fafc;">{{ entry.title|truncatechars:60 }}</p>
+                            <p style="font-size: 0.75rem; color: #94a3b8;">Slug: {{ entry.slug }}</p>
+                            {% if entry.error_message %}
+                                <div style="color: #f87171; font-size: 0.72rem; margin-top: 4px; max-width: 280px; opacity: 0.85;">
+                                    <i class="fa-solid fa-circle-exclamation"></i> {{ entry.error_message|truncatechars:80 }}
+                                </div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="badge badge-{{ entry.status }}">
+                                {% if entry.status == 'processing' %}<i class="fa-solid fa-spinner fa-spin" style="font-size: 8px; margin-right: 5px;"></i>{% endif %}
+                                {{ entry.status }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if entry.published_url %}
+                            <a href="{{ entry.published_url }}" target="_blank" class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.75rem;">
+                                <i class="fa-solid fa-external-link"></i> View
+                            </a>
+                            {% else %}
+                            <span style="color: #94a3b8; font-size: 0.75rem;">Not published</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Right Column: Batch Info & Progress -->
+    <div style="display: flex; flex-direction: column; gap: 2rem;">
+        <div class="card">
+            <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                <i class="fa-solid fa-circle-info" style="color: var(--primary);"></i>
+                Batch Status
+            </h3>
+            
+            <!-- Live Action Banner -->
+            <div id="liveActionBanner" style="display: {% if batch.status == 'processing' %}block{% else %}none{% endif %}; padding: 0.85rem 1rem; border-radius: 10px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.25); margin-bottom: 1.25rem; font-size: 0.8125rem; color: #a78bfa; animation: pulse 2s infinite;">
+                <i class="fa-solid fa-bolt" style="margin-right: 6px;"></i>
+                <span id="liveActionText">{{ batch.current_action|default:"Processing..." }}</span>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <div>
+                    <p style="font-size: 0.75rem; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-bottom: 0.5rem;">Completion Progress</p>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.875rem; margin-bottom: 0.5rem;">
+                        <span style="font-weight: 600;"><span id="processedCount">{{ batch.processed_sites }}</span> / <span id="totalCount">{{ batch.total_sites }}</span> <span style="font-weight:400;color:#94a3b8;font-size:0.75rem;">processed</span></span>
+                        <span style="color: var(--primary); font-weight: 700;" id="progressPct">
+                            {{ batch.progress_percentage }}%
+                        </span>
+                    </div>
+                    <div class="progress-wrapper" style="height: 12px;">
+                        <div class="progress-bar" id="progressBar" style="width: {{ batch.progress_percentage }}%"></div>
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div style="padding: 1.25rem; border-radius: 12px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); box-shadow: inset 0 0 20px rgba(16, 185, 129, 0.05); text-align: center;">
+                        <p style="font-size: 0.75rem; color: #34d399; font-weight: 700; margin-bottom: 0.25rem; letter-spacing: 0.05em;">SUCCESS</p>
+                        <p style="font-size: 1.75rem; font-weight: 800; color: #34d399; text-shadow: 0 0 10px rgba(16, 185, 129, 0.4);" id="successCount">{{ batch.completed_sites }}</p>
+                    </div>
+                    <div style="padding: 1.25rem; border-radius: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); box-shadow: inset 0 0 20px rgba(239, 68, 68, 0.05); text-align: center;">
+                        <p style="font-size: 0.75rem; color: #f87171; font-weight: 700; margin-bottom: 0.25rem; letter-spacing: 0.05em;">FAILED</p>
+                        <p style="font-size: 1.75rem; font-weight: 800; color: #f87171; text-shadow: 0 0 10px rgba(239, 68, 68, 0.4);" id="failedCount">{{ batch.failed_sites }}</p>
+                    </div>
+                </div>
+
+                <div style="padding-top: 1.25rem; border-top: 1px solid var(--border);">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem;">
+                        <span style="font-size: 0.875rem; color: #94a3b8;">Current Status</span>
+                        <span class="badge badge-{{ batch.status }}" id="batchStatusBadge">{{ batch.status }}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="font-size: 0.875rem; color: #94a3b8;">Started On</span>
+                        <span style="font-size: 0.875rem; font-weight: 500;">{{ batch.created_at|date:"M d, H:i" }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255, 255, 255, 0.05);">
+            <h3 style="font-size: 0.875rem; font-weight: 700; margin-bottom: 1rem; color: #f8fafc;">Quick Instructions</h3>
+            <ul style="font-size: 0.8125rem; color: #94a3b8; padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.75rem;">
+                <li>Sites are published to <strong style="color: var(--primary-light);">sites.google.com/view/{slug}</strong></li>
+                <li>Each site creation takes roughly <strong style="color: #f8fafc;">15-30 seconds</strong>.</li>
+                <li><strong style="color: #f87171;">Do not close the application</strong> while automation is running.</li>
+                <li>Failed entries can be retried with the <strong style="color: #fbbf24;">Retry Failed</strong> button.</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Custom Confirmation Modal -->
+<div id="customClearModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px); z-index: 1000; justify-content: center; align-items: center;">
+    <div style="background: var(--bg-card); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; width: 400px; padding: 2rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); text-align: center; animation: modalPop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+        <div style="width: 64px; height: 64px; border-radius: 50%; background: rgba(239, 68, 68, 0.1); color: #f87171; font-size: 2rem; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem;">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <h3 style="color: #f8fafc; font-size: 1.25rem; font-weight: 700; margin-bottom: 0.75rem;">Reset Batch Progress?</h3>
+        <p style="color: #94a3b8; font-size: 0.875rem; margin-bottom: 2rem; line-height: 1.5;">Are you sure you want to clear this batch? All current progress will be lost and set back to 0.</p>
+        <div style="display: flex; gap: 1rem; justify-content: center;">
+            <button onclick="hideClearModal()" class="btn btn-secondary" style="flex: 1; padding: 0.75rem;">Cancel</button>
+            <button id="confirmClearBtn" class="btn btn-primary" style="flex: 1; padding: 0.75rem; background: #ef4444; border-color: #ef4444; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);">Yes, Reset</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    @keyframes modalPop {
+        from { transform: scale(0.8); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+    }
+</style>
+
+<script>
+    let currentBatchToClear = null;
+    const BATCH_ID = {{ batch.id }};
+    let pollingActive = {% if batch.status == 'processing' %}true{% else %}false{% endif %};
+
+    function showClearModal(batchId) {
+        currentBatchToClear = batchId;
+        const modal = document.getElementById('customClearModal');
+        modal.style.display = 'flex';
+    }
+    
+    function hideClearModal() {
+        const modal = document.getElementById('customClearModal');
+        modal.style.display = 'none';
+        currentBatchToClear = null;
+    }
+    
+    document.getElementById('confirmClearBtn').addEventListener('click', function() {
+        if (currentBatchToClear) {
+            this.disabled = true;
+            this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Resetting...';
+            document.getElementById('clearForm-' + currentBatchToClear).submit();
+        }
+    });
+
+    // ---- Live Polling ----
+    function pollStatus() {
+        if (!pollingActive) return;
+        
+        fetch(`/api/batch/${BATCH_ID}/status/`)
+            .then(r => r.json())
+            .then(data => {
+                // Update progress
+                const processed = (data.completed_sites || 0) + (data.failed_sites || 0);
+                document.getElementById('processedCount').textContent = processed;
+                document.getElementById('totalCount').textContent = data.total_sites;
+                document.getElementById('progressPct').textContent = data.progress_percentage + '%';
+                document.getElementById('progressBar').style.width = data.progress_percentage + '%';
+                document.getElementById('successCount').textContent = data.completed_sites;
+                document.getElementById('failedCount').textContent = data.failed_sites;
+
+                // Update live action
+                const banner = document.getElementById('liveActionBanner');
+                if (data.status === 'processing') {
+                    banner.style.display = 'block';
+                    document.getElementById('liveActionText').textContent = data.current_action || 'Processing...';
+                } else {
+                    banner.style.display = 'none';
+                }
+
+                // Update badge
+                const badge = document.getElementById('batchStatusBadge');
+                badge.textContent = data.status;
+                badge.className = 'badge badge-' + data.status;
+
+                // Update entries table
+                updateEntriesTable(data.entries);
+
+                // Stop polling if done
+                if (data.status === 'completed' || data.status === 'failed') {
+                    pollingActive = false;
+                    // Reload to get updated action buttons
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    setTimeout(pollStatus, 2000);
+                }
+            })
+            .catch(() => {
+                setTimeout(pollStatus, 5000);
+            });
+    }
+
+    function updateEntriesTable(entries) {
+        entries.forEach(entry => {
+            const row = document.querySelector(`tr[data-entry-id="${entry.id}"]`);
+            if (!row) return;
+
+            // Update status badge
+            const badgeCell = row.querySelectorAll('td')[1];
+            let spinnerHtml = entry.status === 'processing' 
+                ? '<i class="fa-solid fa-spinner fa-spin" style="font-size: 8px; margin-right: 5px;"></i>' 
+                : '';
+            badgeCell.innerHTML = `<span class="badge badge-${entry.status}">${spinnerHtml}${entry.status}</span>`;
+
+            // Update action cell
+            const actionCell = row.querySelectorAll('td')[2];
+            if (entry.published_url) {
+                actionCell.innerHTML = `<a href="${entry.published_url}" target="_blank" class="btn btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.75rem;"><i class="fa-solid fa-external-link"></i> View</a>`;
+            }
+
+            // Update error message in title cell
+            const titleCell = row.querySelectorAll('td')[0];
+            const existingError = titleCell.querySelector('div[style*="color: #f87171"]');
+            if (entry.error_message && entry.status === 'failed') {
+                const errorHtml = `<div style="color: #f87171; font-size: 0.72rem; margin-top: 4px; max-width: 280px; opacity: 0.85;"><i class="fa-solid fa-circle-exclamation"></i> ${entry.error_message.substring(0, 80)}</div>`;
+                if (existingError) {
+                    existingError.outerHTML = errorHtml;
+                } else {
+                    titleCell.insertAdjacentHTML('beforeend', errorHtml);
+                }
+            } else if (existingError && entry.status !== 'failed') {
+                existingError.remove();
+            }
+        });
+    }
+
+    // Start polling
+    if (pollingActive) {
+        setTimeout(pollStatus, 2000);
+    }
+</script>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const searchInput = document.getElementById('searchInput');
+    const table = document.getElementById('entriesTable');
+    const rows = table.getElementsByTagName('tr');
+
+    searchInput.addEventListener('keyup', function() {
+        const filter = searchInput.value.toLowerCase();
+        for (let i = 1; i < rows.length; i++) {
+            const title = rows[i].getElementsByTagName('td')[0].textContent.toLowerCase();
+            if (title.indexOf(filter) > -1) {
+                rows[i].style.display = "";
+            } else {
+                rows[i].style.display = "none";
+            }
+        }
+    });
+</script>
+{% endblock %}
