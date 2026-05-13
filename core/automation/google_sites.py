@@ -8,6 +8,9 @@ import time
 import traceback
 from functools import wraps
 from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from django.utils.text import slugify
 
@@ -98,14 +101,39 @@ def _ensure_logged_into_sites(page):
     try:
         u = page.url or ""
         if "accounts.google.com" in u and "signin" in u.lower():
-            raise RuntimeError(
-                "Google login required — open the browser profile once, sign in to Google, "
-                "then restart automation."
-            )
-    except RuntimeError:
-        raise
-    except Exception:
-        pass
+            # Try to automate login using .env credentials
+            _login_to_google(page)
+    except Exception as e:
+        logger.warning("Automated login attempt failed: %s", e)
+
+
+def _login_to_google(page):
+    """Perform automated Google login using .env credentials."""
+    email = os.getenv("GMAIL_EMAIL")
+    password = os.getenv("GMAIL_PASSWORD")
+
+    if not email or not password:
+        logger.error("GMAIL_EMAIL or GMAIL_PASSWORD not found in .env file.")
+        return
+
+    logger.info("Attempting automated Google login for: %s", email)
+    try:
+        # 1. Email field
+        page.locator('input[type="email"]').fill(email)
+        page.keyboard.press("Enter")
+        time.sleep(2.5)
+
+        # 2. Password field
+        # Sometimes it takes a moment to appear
+        pwd_field = page.locator('input[type="password"]')
+        pwd_field.wait_for(state="visible", timeout=10000)
+        pwd_field.fill(password)
+        page.keyboard.press("Enter")
+        time.sleep(3.0)
+
+        logger.info("Login credentials submitted.")
+    except Exception as e:
+        logger.warning("Login interaction issue: %s", e)
 
 
 def _grant_clipboard(page):
