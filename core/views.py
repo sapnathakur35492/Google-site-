@@ -89,9 +89,14 @@ class UploadBatchView(View):
                 if not title.strip():
                     title = keyword
 
-                # Slug: prefer Keyword (short, stable URLs like sites.google.com/view/xxx/home)
-                slug_src = (keyword.strip() if keyword.strip() else title)[:90]
-                slug = slugify(slug_src)[:80]
+                # Slug: sequential pattern dhr-001, dhr-002...
+                # Check if 'slug' column exists and has value
+                slug_val = row.get('slug', '')
+                if not pd.isna(slug_val) and str(slug_val).strip() and str(slug_val).lower() != 'nan':
+                    slug = slugify(str(slug_val))[:80]
+                else:
+                    # Use sequential counter with 'dhr-' prefix as requested
+                    slug = f"dhr-{str(created_count + 1).zfill(3)}"
 
                 # Handle optional columns dynamically
                 outbound_link = row.get('outbound_link', None)

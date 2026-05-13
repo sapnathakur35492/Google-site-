@@ -29,8 +29,8 @@ MAX_RETRIES_PER_ENTRY = 2
 STEP_TIMEOUT = 15000          # ms – per-element interaction
 SHORT_TIMEOUT = 8000          # ms – theme / flaky UI (never inherit 45s default)
 DIALOG_TIMEOUT = 12000
-PUBLISH_SETTLE_SECS = 8.0     # publish propagation before URL harvest
-URL_POLL_SECS = 35.0          # total time to poll DOM for published URL
+PUBLISH_SETTLE_SECS = 3.0     # publish propagation before URL harvest
+URL_POLL_SECS = 20.0          # total time to poll DOM for published URL
 PAGE_LOAD_SETTLE_SECS = 2.5
 INTER_ENTRY_PAUSE = 1.2       # seconds between entries to avoid rate-limits
 
@@ -231,34 +231,28 @@ def _clipboard_text_async(page) -> str:
         return ""
 
 
-def _verify_public_page_loads(page, url: str) -> bool:
+def _verify_public_page_loads(page, url: str, expected_text: str = "") -> bool:
     """
-    Confirm the URL loads as a real published page (not login wall / hard 404).
-    Uses a short-lived tab so cookies/session match the editor context when needed.
+    Verify the URL is live and contains our brand name via background request.
+    This ensures we don't capture someone else's site or a 404.
     """
     if not url or "sites.google.com" not in url:
         return False
-    tab = None
     try:
-        tab = page.context.new_page()
-        resp = tab.goto(url, wait_until="domcontentloaded", timeout=35000)
-        if not resp or not resp.ok:
-            return False
-        final_u = tab.url or ""
-        if "accounts.google.com" in final_u and "signin" in final_u.lower():
-            return False
-        title = (tab.title() or "").lower()
-        if "404" in title or "not found" in title:
-            return False
-        return True
+        response = page.request.get(url, timeout=12000)
+        if response.status == 200:
+            if "accounts.google.com" in response.url:
+                return False
+            text = response.text().lower()
+            if "404. that's an error" in text or "page not found" in text:
+                return False
+            # Dynamic check: verify our brand is actually on this page
+            if expected_text and expected_text.lower() not in text:
+                return False
+            return True
+        return False
     except Exception:
         return False
-    finally:
-        if tab:
-            try:
-                tab.close()
-            except Exception:
-                pass
 
 
 def _dismiss_chrome(page, rounds=4):
@@ -301,7 +295,8 @@ def branding_title(entry: SiteEntry) -> str:
         return kw.strip()
     ttl = _normalize_nan(entry.title)
     if ttl:
-        return ttl.split("\n")[0].strip()
+        # Use full title, but strip extra whitespace/newlines
+        return " ".join(ttl.split()).strip()
     return "Market Insight"
 
 
@@ -316,20 +311,27 @@ def build_premium_embed_html(entry: SiteEntry) -> str:
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         '</head>'
-        '<body style="margin:0;padding:0;overflow-x:hidden;">'
+        '<body style="margin:0;padding:0;overflow:hidden;">'
         '<div style="font-family:\'Segoe UI\',Roboto,Arial,sans-serif;color:#212121;'
-        'line-height:1.65;font-size:16px;max-width:960px;margin:0 auto;padding:12px 24px 120px;box-sizing:border-box;width:100%;">'
+        'line-height:1.65;font-size:16px;max-width:960px;margin:0 auto;padding:12px 24px 120px;box-sizing:border-box;width:100%;height:auto;overflow:visible;">'
         f'<div style="font-size:1.05rem;margin-bottom:12px;color:#374151;">{TEASER_LINE}</div>'
-        f'<h1 style="font-weight:700;font-size:1.95rem;line-height:1.2;margin:0 0 20px;color:#1a237e">{headline}</h1>'
+        f'<h1 style="font-weight:700;font-size:2.1rem;line-height:1.3;margin:0 0 24px;color:#1a237e;text-align:center;word-wrap:break-word;">{headline}</h1>'
         f'<div id="embedded-main">{body_html}</div>'
         '</div>'
         '<style>'
-        '#embedded-main{overflow:visible;max-width:100%}'
-        '#embedded-main h2{font-size:1.38rem;margin:1.45em 0 .55em;color:#1967d2;font-weight:600;border-bottom:1px solid #dadce0;padding-bottom:6px}'
-        '#embedded-main h3{font-size:1.12rem;margin:1.1em 0 .42em;color:#333;font-weight:600}'
-        '#embedded-main p{margin:.72em 0}'
-        '#embedded-main ul,#embedded-main ol{margin:.72em 0;padding-left:1.45em}'
-        '#embedded-main a{color:#1967d2}'
+        '#embedded-main{overflow:visible!important;max-width:100%;height:auto!important;min-height:auto!important}'
+        '#embedded-main *{overflow:visible!important;max-width:100%;height:auto!important}'
+        '#embedded-main h2{font-size:1.38rem;margin:1.45em 0 .55em;color:#1967d2;font-weight:600;border-bottom:1px solid #dadce0;padding-bottom:6px;overflow:visible!important}'
+        '#embedded-main h3{font-size:1.12rem;margin:1.1em 0 .42em;color:#333;font-weight:600;overflow:visible!important}'
+        '#embedded-main p{margin:.72em 0;overflow:visible!important;max-width:100%;word-wrap:break-word}'
+        '#embedded-main ul,#embedded-main ol{margin:.72em 0;padding-left:1.45em;overflow:visible!important}'
+        '#embedded-main a{color:#1967d2!important;text-decoration:underline;cursor:pointer;pointer-events:auto;display:inline-block}'
+        '#embedded-main a:hover{color:#1557b0!important;text-decoration:underline}'
+        '#embedded-main div{overflow:visible!important;max-width:100%;height:auto!important}'
+        '#embedded-main span{overflow:visible!important;max-width:100%}'
+        '#embedded-main strong,#embedded-main b{overflow:visible!important;max-width:100%}'
+        '#embedded-main em,#embedded-main i{overflow:visible!important;max-width:100%}'
+        'body,html{overflow:hidden!important;height:auto!important}'
         '</style></body></html>'
     )
 
@@ -341,8 +343,9 @@ def _html_text_len_approx(html_blob: str) -> int:
 
 def resize_steps_for_embed(html_blob: str) -> int:
     n = _html_text_len_approx(html_blob)
-    steps = int(math.ceil(n / 48.0) * 22)
-    return max(750, min(4500, steps))
+    # Extra-aggressive multiplier to kill all scrollbars
+    steps = int(math.ceil(n / 32.0) * 45)
+    return max(1800, min(8000, steps))
 
 
 # ===================================================================
@@ -473,45 +476,79 @@ def _click_untitled_document_chip_js(page) -> bool:
 
 @_retry(max_attempts=3, delay=0.45, label="set-site-title")
 def _set_site_title_in_header(page, title: str):
-    """Top bar document title — 'Untitled site' / site name next to Google Sites logo."""
+    """Extreme search for the top-bar document title."""
     title = (title or "").strip()
     if not title:
         return
+    _dismiss_chrome(page, 2)
+    time.sleep(0.5)
 
-    selectors = [
-        'button:has-text("Untitled site")',
-        'button:has-text("Untitled")',
-        '[aria-label*="Untitled site" i]',
-        '[aria-label*="Site name" i]',
-        '[data-tooltip*="Site name" i]',
-        '[aria-label*="Enter site name" i]',
-        'div[role="button"]:has-text("Untitled")',
-        'header [role="button"]:has-text("Untitled")',
-    ]
-    opened = _click_first_visible(page, selectors, timeout=4500)
+    # Use a comprehensive JS search to find the 'Untitled' button/input
+    success = page.evaluate(
+        """(t) => {
+      const needles = [/untitled site/i, /^untitled$/i, /enter site name/i, /site name/i];
+      const all = Array.from(document.querySelectorAll('div[role="button"], button, span[role="button"], [contenteditable="true"], input'));
+      for (const el of all) {
+        const txt = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
+        const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+        if (needles.some(n => n.test(txt) || n.test(aria))) {
+          // If it's the top-left area
+          const r = el.getBoundingClientRect();
+          if (r.top < 150 && r.left < 500) {
+            el.focus();
+            el.click();
+            // Try to set value directly if it's an input
+            if (el.tagName === 'INPUT') {
+              el.value = t;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            return true;
+          }
+        }
+      }
+      return false;
+    }""",
+        title[:120],
+    )
 
-    if not opened:
-        opened = _click_untitled_document_chip_js(page)
+    if not success:
+        # Fallback to absolute click if JS search failed
+        page.mouse.click(125, 48)
+        time.sleep(0.3)
 
-    if not opened:
-        page.mouse.click(115, 48)
-        time.sleep(0.35)
-
-    time.sleep(0.2)
+    # Keyboard entry with A-Backspace-Type sequence
     page.keyboard.press("Control+A")
+    time.sleep(0.1)
     page.keyboard.press("Backspace")
-    page.keyboard.insert_text(title[:120])
+    time.sleep(0.2)
+    page.keyboard.type(title[:120], delay=35)
     page.keyboard.press("Enter")
-    time.sleep(0.45)
+    time.sleep(0.8)
 
+    # Final verify/correct
     if _topbar_still_untitled(page):
-        _click_untitled_document_chip_js(page)
-        time.sleep(0.2)
-        page.keyboard.press("Control+A")
-        page.keyboard.press("Backspace")
-        page.keyboard.insert_text(title[:120])
-        page.keyboard.press("Enter")
-        time.sleep(0.35)
+        logger.warning("Header still untitled, trying forced JS injection")
+        page.evaluate(
+            """(t) => {
+          const btn = Array.from(document.querySelectorAll('header [role="button"], [role="banner"] [role="button"]'))
+            .find(b => /untitled/i.test(b.innerText));
+          if (btn) {
+            btn.click();
+            setTimeout(() => {
+              const inp = document.activeElement;
+              if (inp) {
+                if (inp.tagName === 'INPUT') inp.value = t;
+                else inp.innerText = t;
+                inp.dispatchEvent(new Event('input', { bubbles: true }));
+                inp.dispatchEvent(new Event('blur', { bubbles: true }));
+              }
+            }, 200);
+          }
+        }""",
+            title[:120],
+        )
+        time.sleep(1.0)
 
 
 def _topbar_still_untitled(page) -> bool:
@@ -532,55 +569,61 @@ def _topbar_still_untitled(page) -> bool:
 
 @_retry(max_attempts=3, delay=0.45, label="set-banner-title")
 def _set_banner_page_title(page, title: str):
-    """Dark banner centre — must replace Click to edit text / Your page title (no placeholder left)."""
+    """Extreme search for the large banner title (hero)."""
     title = (title or "").strip()
     if not title:
         return
+    time.sleep(0.4)
 
-    clicked = False
-    for phrase in ("Click to edit text", "Your page title", "Click to edit"):
-        try:
-            loc = page.get_by_text(phrase, exact=False).first
-            if loc.is_visible(timeout=2500):
-                loc.click(timeout=5000)
-                clicked = True
+    # Power JS click for banner
+    success = page.evaluate(
+        """(t) => {
+      // 1. Try to find the BIG H1 title first
+      const h1s = Array.from(document.querySelectorAll('h1[contenteditable="true"], [role="main"] h1, header h1, .compact h1'));
+      for (const h1 of h1s) {
+        h1.scrollIntoView({ block: 'center' });
+        h1.focus();
+        h1.click();
+        // Force set text via DOM first
+        h1.innerText = t; 
+        h1.dispatchEvent(new Event('input', { bubbles: true }));
+        h1.dispatchEvent(new Event('blur', { bubbles: true }));
+        return true;
+      }
+      
+      // 2. Fallback to placeholder search
+      const needles = [/click to edit text/i, /your page title/i, /click to edit/i, /click to edit heading/i, /your title/i];
+      const boxes = Array.from(document.querySelectorAll('[role="textbox"], [contenteditable="true"]'));
+      for (const el of boxes) {
+        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+        if (needles.some(n => n.test(txt)) && txt.length < 60) {
+          el.scrollIntoView({ block: 'center' });
+          el.focus();
+          el.click();
+          el.innerText = t;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+      }
+      return false;
+    }""",
+        title[:500],
+    )
+    if not success:
+        # Try a wider range of coordinates for the banner title
+        coords = [(640, 320), (400, 460), (640, 400)]
+        for cx, cy in coords:
+            page.mouse.click(cx, cy)
+            time.sleep(0.2)
+            page.keyboard.press("Control+A")
+            page.keyboard.type(title[:500], delay=20)
+            time.sleep(0.3)
+            if not _banner_still_has_placeholder(page):
+                success = True
                 break
-        except Exception:
-            continue
 
-    if not clicked:
-        clicked = _click_banner_placeholder_js(page)
-
-    if not clicked:
-        try:
-            page.locator('[role="main"] header [role="textbox"], header [role="textbox"]').first.click(
-                timeout=5000
-            )
-            clicked = True
-        except Exception:
-            pass
-
-    if not clicked:
-        try:
-            page.locator('[role="main"] [role="textbox"]').first.click(timeout=6000)
-            clicked = True
-        except Exception:
-            logger.warning("Banner title field not found via fallback")
-
-    if not clicked:
-        return
-
-    time.sleep(0.2)
-    page.keyboard.press("Control+A")
-    page.keyboard.press("Backspace")
-    page.keyboard.insert_text(title[:500])
-    time.sleep(0.25)
-    try:
-        page.keyboard.press("Tab")
-        page.keyboard.press("Tab")
-    except Exception:
-        pass
-    time.sleep(0.2)
+    page.keyboard.press("Escape")
+    time.sleep(0.4)
 
 
 def _set_banner_enter_site_name_if_present(page, title: str):
@@ -589,17 +632,18 @@ def _set_banner_enter_site_name_if_present(page, title: str):
     if not title:
         return
     try:
-        for phrase in ("Enter site name",):
+        placeholders = ["Enter site name", "Site name"]
+        for phrase in placeholders:
             loc = page.get_by_text(phrase, exact=True).first
-            if loc.is_visible(timeout=1200):
+            if loc.is_visible(timeout=1500):
                 loc.click(timeout=4000)
-                time.sleep(0.15)
+                time.sleep(0.2)
                 page.keyboard.press("Control+A")
                 page.keyboard.press("Backspace")
-                page.keyboard.insert_text(title[:120])
+                page.keyboard.type(title[:120], delay=20)
                 time.sleep(0.2)
                 page.keyboard.press("Enter")
-                time.sleep(0.2)
+                time.sleep(0.3)
                 return
     except Exception:
         pass
@@ -723,7 +767,10 @@ def _insert_embed_content(page, premium_html: str):
     # Click Insert
     insert_btn = page.locator('div[role="dialog"] div[role="button"]:has-text("Insert")').first
     insert_btn.click(force=True, timeout=8000)
-    time.sleep(2.5)
+    
+    # Wait for the widget to appear in the main editor
+    time.sleep(3.5)
+    _smart_wait(page, timeout_ms=5000)
 
 
 def _embed_resize_target(page):
@@ -1169,7 +1216,7 @@ def _fallback_urls_for_slug(page, published_slug: str):
     return out
 
 
-def _harvest_live_site_url(page, published_slug: str) -> str:
+def _harvest_live_site_url(page, entry: SiteEntry, published_slug: str) -> str:
     """
     Aggregate DOM + clipboard + slug fallbacks. Never store workspace-root URLs (404).
     """
@@ -1235,7 +1282,9 @@ def _harvest_live_site_url(page, published_slug: str) -> str:
         time.sleep(0.45)
 
     for fb in _fallback_urls_for_slug(page, published_slug):
-        if _verify_public_page_loads(page, fb):
+        # Pass the brand name to ensure we verify the CORRECT site
+        brand = branding_title(entry)
+        if _verify_public_page_loads(page, fb, expected_text=brand):
             logger.info("Harvest verified fallback URL: %s", fb)
             return fb.rstrip("/")
 
@@ -1244,12 +1293,19 @@ def _harvest_live_site_url(page, published_slug: str) -> str:
 
 def _build_publish_slug(entry: SiteEntry) -> str:
     """
-    URL-safe slug for the Publish dialog — ties to DB slug (keyword-based after import fix).
-    Google requires lowercase [a-z0-9-]; random suffix avoids collisions.
+    URL-safe slug for the Publish dialog.
+    If the slug matches the dhr-001 pattern, we use it exactly as provided
+    to ensure the user's sequential requirement is met.
     """
-    base = (entry.slug or "").strip()
+    base = (entry.slug or "").strip().lower()
     if not base:
         base = slugify(branding_title(entry))
+    
+    # If it's a sequential slug like dhr-001, don't add random suffix
+    if re.match(r"^[a-z]+-\d{3,4}$", base):
+        return base[:58]
+
+    # Otherwise, add random suffix to avoid collisions for generic slugs
     base = re.sub(r"-{2,}", "-", base).strip("-")[:44]
     suf = random.randint(1000, 9999)
     combined = f"{base}-{suf}"
@@ -1261,35 +1317,76 @@ def _build_publish_slug(entry: SiteEntry) -> str:
 def _publish_and_capture_url(page, entry: SiteEntry):
     """Publish and return a validated public URL (never workspace domain roots)."""
     page.mouse.wheel(0, -8000)
-    time.sleep(0.45)
+    time.sleep(0.2)
 
     publish_selectors = [
         'div[role="button"]:has-text("Publish")',
         'button:has-text("Publish")',
     ]
-    if not _click_first_visible(page, publish_selectors, timeout=10000):
+    if not _click_first_visible(page, publish_selectors, timeout=6000):
         page.mouse.click(1260, 40)
-    time.sleep(0.9)
+    time.sleep(0.4)
 
     final_slug = _build_publish_slug(entry)
 
-    try:
-        dialog = page.locator('div[role="dialog"]').first
-        if dialog.is_visible(timeout=9000):
-            inp = dialog.locator('input[type="text"], input:not([type="hidden"])').first
-            inp.click(timeout=5000)
-            page.keyboard.press("Control+A")
-            page.keyboard.insert_text(final_slug)
-            time.sleep(0.45)
+    # Ensure dialog is open
+    dialog_opened = False
+    for _ in range(3):
+        if page.locator('div[role="dialog"]').is_visible(timeout=3000):
+            dialog_opened = True
+            break
+        # Re-click if not opened
+        _click_first_visible(page, publish_selectors, timeout=2000)
+        time.sleep(1.0)
 
-            pub_btn = dialog.locator(
-                'div[role="button"]:has-text("Publish"), button:has-text("Publish")'
-            ).last
-            pub_btn.click(force=True, timeout=8000)
-        else:
+    if dialog_opened:
+        try:
+            dialog = page.locator('div[role="dialog"]').first
+            inp = dialog.locator('input[type="text"], input:not([type="hidden"])').first
+            
+            def attempt_publish(slug_to_use):
+                inp.click(timeout=3000)
+                time.sleep(0.2)
+                page.keyboard.press("Control+A")
+                page.keyboard.press("Backspace")
+                time.sleep(0.1)
+                page.keyboard.type(slug_to_use, delay=20)
+                time.sleep(0.5)
+                
+                # Use Enter first - it's the most reliable way in Google dialogs
+                page.keyboard.press("Enter")
+                time.sleep(1.0)
+
+                # Fallback click
+                try:
+                    pub_btn = dialog.locator('div[role="button"]:has-text("Publish"), button:has-text("Publish"), [jsname="V67oCd"]').last
+                    if pub_btn.is_visible(timeout=2000):
+                        pub_btn.click(force=True, timeout=2000)
+                except:
+                    page.keyboard.press("Enter")
+
+                # Wait for dialog to disappear
+                for _ in range(5):
+                    if not dialog.is_visible(timeout=500):
+                        return True
+                    time.sleep(1.0)
+                    page.keyboard.press("Enter") # Re-try Enter
+                return False
+                
+            success_pub = attempt_publish(final_slug)
+            
+            # If dialog is STILL visible, the slug was likely taken.
+            # Append random suffix and retry.
+            if not success_pub and dialog.is_visible(timeout=500):
+                logger.warning("Publish dialog still open. Slug might be taken. Retrying with suffix.")
+                final_slug = f"{final_slug}-{random.randint(100, 999)}"
+                attempt_publish(final_slug)
+                
+        except Exception as e:
+            logger.warning("Publish dialog interaction: %s", e)
             page.keyboard.press("Enter")
-    except Exception as e:
-        logger.warning("Publish dialog interaction: %s", e)
+    else:
+        logger.warning("Publish dialog never appeared, hitting Enter as fallback")
         page.keyboard.press("Enter")
 
     time.sleep(PUBLISH_SETTLE_SECS)
@@ -1298,7 +1395,7 @@ def _publish_and_capture_url(page, entry: SiteEntry):
     except PlaywrightTimeoutError:
         pass
 
-    url = _harvest_live_site_url(page, final_slug)
+    url = _harvest_live_site_url(page, entry, final_slug)
 
     if not url or not _looks_like_valid_published_url(url):
         raise RuntimeError(
@@ -1338,11 +1435,11 @@ def _process_single_entry(page, entry, index, total, batch):
     # 3. Site name + banner (after theme so placeholders are not wiped)
     _apply_all_branding_after_theme(page, brand)
 
-    # 4. Full HTML embed — 100% of Content column from XLSX
+    # 4. Full HTML embed
     batch.current_action = f"[{index}/{total}] Embedding content..."
     batch.save()
     _insert_embed_content(page, premium_html)
-    _refresh_branding_after_embed(page, brand)
+    # (Removed redundant branding refresh to avoid UI jumping)
 
     # 5. Stretch embed so full paragraph/html shows (no inner scrollbar)
     rsteps = resize_steps_for_embed(premium_html)
@@ -1373,6 +1470,10 @@ def run_automation(batch_id):
     """Main entry point — called from the Django view in a background thread."""
     batch = None
     context = None
+    browser = None
+
+    # Scalability: Restart browser every N entries to clear memory
+    RESTART_EVERY = 40
 
     try:
         batch = SiteBatch.objects.get(id=batch_id)
@@ -1384,38 +1485,56 @@ def run_automation(batch_id):
             batch.save()
             return
 
+        user_data_dir = os.path.abspath(os.path.join(os.getcwd(), "google_session"))
+        logger.info("Starting bulk engine for %s row(s)", len(entries_list))
+        
+        batch.current_action = f"Initializing engine for {len(entries_list)} sites..."
+        batch.save()
+
         with sync_playwright() as p:
-            user_data_dir = os.path.abspath(os.path.join(os.getcwd(), "google_session"))
+            def launch_ctx():
+                logger.info("Launching/Restarting browser context...")
+                batch.current_action = "Launching browser (Playwright)..."
+                batch.save()
+                ctx = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    headless=False,
+                    slow_mo=0,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--start-maximized",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
+                    no_viewport=True,
+                )
+                pg = ctx.pages[0]
+                pg.set_default_timeout(45000)
+                _grant_clipboard(pg)
+                return ctx, pg
 
-            logger.info(
-                "Starting bulk engine for %s row(s) — titles + embed + public + publish",
-                len(entries_list),
-            )
-            batch.current_action = "Launching browser..."
-            batch.save()
-
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                headless=False,
-                slow_mo=0,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--start-maximized",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
-                no_viewport=True,
-            )
-
-            page = context.pages[0]
-            page.set_default_timeout(45000)
-            _grant_clipboard(page)
-
+            context, page = launch_ctx()
             total = len(entries_list)
+
             for index, entry in enumerate(entries_list, 1):
+                # FORCE sequential slug dhr-001, dhr-002...
+                new_slug = f"dhr-{str(index).zfill(3)}"
+                if entry.slug != new_slug:
+                    entry.slug = new_slug
+                    entry.save()
+
+                # Scalability: Periodic browser restart
+                if index > 1 and (index - 1) % RESTART_EVERY == 0:
+                    logger.info("Reached %s entries, restarting browser to maintain stability...", index - 1)
+                    batch.current_action = f"Restarting browser for stability ({index}/{total})..."
+                    batch.save()
+                    context.close()
+                    time.sleep(2.0)
+                    context, page = launch_ctx()
+
                 if page.is_closed():
-                    logger.error("Page closed unexpectedly; aborting")
-                    break
+                    logger.error("Page closed unexpectedly; attempting to relaunch")
+                    context, page = launch_ctx()
 
                 # Refresh entry from DB
                 current_entry = SiteEntry.objects.get(id=entry.id)
@@ -1439,22 +1558,26 @@ def run_automation(batch_id):
                         batch.save()
                         logger.info("SUCCESS [%s/%s]: %s", index, total, url)
 
-                        # Dismiss any leftover dialogs
                         _dismiss_chrome(page, 3)
                         success = True
                         break
 
                     except Exception as entry_err:
                         last_error = str(entry_err)
-                        logger.warning(
-                            "Entry attempt %s/%s failed: %s",
-                            attempt, MAX_RETRIES_PER_ENTRY, entry_err,
-                        )
+                        logger.warning("Entry attempt %s/%s failed: %s", attempt, MAX_RETRIES_PER_ENTRY, entry_err)
                         _safe_screenshot(page, f"entry_{current_entry.id}_attempt{attempt}")
                         _dismiss_chrome(page, 5)
 
+                        if "accounts.google.com" in (page.url or ""):
+                            logger.error("Session expired or login required. Aborting batch.")
+                            raise RuntimeError("Google session expired. Please log in manually and restart.")
+
                         if attempt < MAX_RETRIES_PER_ENTRY:
-                            time.sleep(2.0)
+                            # If it failed, try to refresh page or go back to start for next attempt
+                            try:
+                                page.goto("about:blank")
+                                time.sleep(1.0)
+                            except: pass
 
                 if not success:
                     current_entry.status = "failed"
@@ -1466,7 +1589,6 @@ def run_automation(batch_id):
                     logger.error("FAILED [%s/%s]: %s", index, total, last_error[:200])
                     _dismiss_chrome(page, 5)
 
-                # Brief pause between entries to avoid rate-limiting
                 if index < total:
                     time.sleep(INTER_ENTRY_PAUSE)
 
