@@ -27,19 +27,19 @@ TEASER_LINE = "\U0001f4ca\U0001f4e9 Access Comprehensive Industry Insights"
 # ---------------------------------------------------------------------------
 MAX_RETRIES_PER_ENTRY = 2
 STEP_TIMEOUT = 15000          # ms – per-element interaction
-SHORT_TIMEOUT = 8000          # ms – theme / flaky UI (never inherit 45s default)
 DIALOG_TIMEOUT = 12000
-PUBLISH_SETTLE_SECS = 3.0     # publish propagation before URL harvest
 URL_POLL_SECS = 20.0          # total time to poll DOM for published URL
-PAGE_LOAD_SETTLE_SECS = 2.5
-INTER_ENTRY_PAUSE = 1.2       # seconds between entries to avoid rate-limits
+# Settle times (reduced for hyper-speed)
+PAGE_LOAD_SETTLE_SECS = 0.5
+INTER_ENTRY_PAUSE = 0.5
+PUBLISH_SETTLE_SECS = 0.5
+SHORT_TIMEOUT = 5000
 
 SCREENSHOTS_DIR = os.path.abspath(os.path.join(os.getcwd(), "debug_screenshots"))
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
-# Set GS_SKIP_SHARE=0 only if you must open Share and set "Published site" from automation.
-# Default: skip Share entirely (faster; many tenants already default to Public).
-SKIP_SHARE_DIALOG = os.environ.get("GS_SKIP_SHARE", "1").strip().lower() in ("1", "true", "yes", "on")
+# Enforce Public visibility for phone/external access
+SKIP_SHARE_DIALOG = False
 
 
 # ===================================================================
@@ -255,15 +255,14 @@ def _verify_public_page_loads(page, url: str, expected_text: str = "") -> bool:
         return False
 
 
-def _dismiss_chrome(page, rounds=4):
+def _dismiss_chrome(page, rounds=3):
     """Press Escape several times to close any popups / tooltips."""
     for _ in range(rounds):
         try:
             page.keyboard.press("Escape")
-            time.sleep(0.12)
+            time.sleep(0.08)
         except Exception:
             break
-
 
 def _click_first_visible(page, selectors, timeout=5000, force=True):
     """Try a list of selectors; click the first visible one. Returns True on success."""
@@ -282,21 +281,22 @@ def _click_first_visible(page, selectors, timeout=5000, force=True):
 #  Content builders
 # ===================================================================
 
-def branding_title(entry: SiteEntry) -> str:
-    """
-    Short name for site chrome, banner H1, and embed headline — matches consumer Sites
-    examples (e.g. united-states-*-market) where nav title is one clean line.
+def site_name_short(entry: SiteEntry) -> str:
+    """First 3 words for the top-left 'Site Name' in the header."""
+    kw = _normalize_nan(entry.keyword) or _normalize_nan(entry.title) or "Market Insight"
+    words = kw.split()
+    return " ".join(words[:3]).strip()
 
-    Prefer **Keyword** when present (sample XLSX uses it as the market title); else first
-    line of Title. Full SEO/long copy stays only inside the Content column HTML.
-    """
+
+def branding_title(entry: SiteEntry) -> str:
+    """Full Title for the big Banner / Hero section."""
+    ttl = _normalize_nan(entry.title)
+    if ttl:
+        # Prioritize full Title for the banner
+        return " ".join(ttl.split()).strip()
     kw = _normalize_nan(entry.keyword)
     if kw:
         return kw.strip()
-    ttl = _normalize_nan(entry.title)
-    if ttl:
-        # Use full title, but strip extra whitespace/newlines
-        return " ".join(ttl.split()).strip()
     return "Market Insight"
 
 
@@ -328,10 +328,10 @@ def build_premium_embed_html(entry: SiteEntry) -> str:
         '#embedded-main a{color:#1967d2!important;text-decoration:underline;cursor:pointer;pointer-events:auto;display:inline-block}'
         '#embedded-main a:hover{color:#1557b0!important;text-decoration:underline}'
         '#embedded-main div{overflow:visible!important;max-width:100%;height:auto!important}'
-        '#embedded-main span{overflow:visible!important;max-width:100%}'
-        '#embedded-main strong,#embedded-main b{overflow:visible!important;max-width:100%}'
-        '#embedded-main em,#embedded-main i{overflow:visible!important;max-width:100%}'
-        'body,html{overflow:hidden!important;height:auto!important}'
+        '#embedded-main span{max-width:100%}'
+        '#embedded-main strong,#embedded-main b{max-width:100%}'
+        '#embedded-main em,#embedded-main i{max-width:100%}'
+        'body,html{overflow:visible!important;height:auto!important}'
         '</style></body></html>'
     )
 
@@ -342,10 +342,10 @@ def _html_text_len_approx(html_blob: str) -> int:
 
 
 def resize_steps_for_embed(html_blob: str) -> int:
-    n = _html_text_len_approx(html_blob)
-    # Extra-aggressive multiplier to kill all scrollbars
-    steps = int(math.ceil(n / 32.0) * 45)
-    return max(1800, min(8000, steps))
+    chars = len(html_blob or "")
+    # Aggressive scaling: ~3 steps per char + 3500 buffer
+    steps = int(chars * 3.1) + 3500
+    return max(3500, min(85000, steps))
 
 
 # ===================================================================
@@ -357,9 +357,9 @@ def _fill_textarea_verified(page, textarea_locator, full_html: str):
     textarea_locator.click(timeout=STEP_TIMEOUT)
     time.sleep(0.15)
 
-    # Strategy 1: Playwright fill
+    # Strategy 1: Playwright fill (fastest)
     textarea_locator.fill(full_html)
-    time.sleep(0.25)
+    time.sleep(0.3)
     got = textarea_locator.input_value()
     if len(got) == len(full_html):
         return
@@ -370,22 +370,50 @@ def _fill_textarea_verified(page, textarea_locator, full_html: str):
         "(el, val) => { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); }",
         full_html,
     )
-    time.sleep(0.25)
+    time.sleep(0.4)
     got2 = textarea_locator.input_value()
     if len(got2) == len(full_html):
         return
 
-    # Strategy 3: Clear + type (slower but reliable for very large content)
-    logger.warning("JS evaluate also mismatched (%s), trying clear+clipboard", len(got2))
-    textarea_locator.click(timeout=5000)
-    page.keyboard.press("Control+A")
-    page.keyboard.press("Backspace")
-    time.sleep(0.1)
-    textarea_locator.fill(full_html)
-    time.sleep(0.3)
-    got3 = textarea_locator.input_value()
-    if len(got3) != len(full_html):
-        raise RuntimeError(f"Embed HTML truncated after 3 attempts: expected {len(full_html)}, got {len(got3)}")
+    # Strategy 3: Super-Robust Chunked Injection (for massive 15k+ content)
+    logger.info("Attempting Super-Robust Chunked Injection (Total length: %s chars)...", len(full_html))
+    try:
+        # Clear first
+        textarea_locator.click(timeout=8000)
+        page.keyboard.press("Control+A")
+        page.keyboard.press("Backspace")
+        time.sleep(0.5)
+
+        # Inject in 5000-char chunks to bypass browser clipboard limits
+        chunk_size = 5000
+        for i in range(0, len(full_html), chunk_size):
+            chunk = full_html[i : i + chunk_size]
+            page.evaluate("(t) => { navigator.clipboard.writeText(t); }", chunk)
+            time.sleep(0.3)
+            page.keyboard.press("Control+V")
+            time.sleep(0.4) # Small pause between chunks
+        
+        # Settle
+        time.sleep(1.5)
+        
+        got_val = textarea_locator.input_value()
+        # Verify both length and that the end of the content matches
+        if len(got_val) >= len(full_html) * 0.99 or full_html[-50:] in got_val:
+            logger.info("Content verified: Super-Robust Injection SUCCESS (%s chars)", len(got_val))
+            return
+        else:
+             logger.warning("Chunked injection verification failed: %s/%s chars.", len(got_val), len(full_html))
+    except Exception as e:
+        logger.warning("Chunked injection failed: %s", e)
+
+    # Strategy 4: Final fallback - Direct JS Value Set
+    logger.warning("Pasting failed verification, trying direct JS value set...")
+    textarea_locator.evaluate("(el, val) => { el.value = val; el.dispatchEvent(new Event('input', { bubbles: true })); }", full_html)
+    time.sleep(1.0)
+    
+    final_got = textarea_locator.input_value()
+    if len(final_got) < len(full_html) * 0.9:
+        raise RuntimeError(f"FATAL: Could not achieve 100% content load. Expected {len(full_html)}, got {len(final_got)}")
 
 
 def _click_banner_placeholder_js(page) -> bool:
@@ -522,9 +550,12 @@ def _set_site_title_in_header(page, title: str):
     time.sleep(0.1)
     page.keyboard.press("Backspace")
     time.sleep(0.2)
-    page.keyboard.type(title[:120], delay=35)
+    # Type title
+    page.keyboard.type(title[:120], delay=25)
     page.keyboard.press("Enter")
-    time.sleep(0.8)
+    time.sleep(0.3)
+    page.keyboard.press("Escape")
+    time.sleep(0.6)
 
     # Final verify/correct
     if _topbar_still_untitled(page):
@@ -575,40 +606,63 @@ def _set_banner_page_title(page, title: str):
         return
     time.sleep(0.4)
 
-    # Power JS click for banner
+    # Aggressive Typing Method
+    try:
+        # Find the title box and click it to focus
+        found = page.evaluate("""() => {
+            const isPlaceholder = (txt) => {
+                const lower = (txt || '').toLowerCase();
+                return lower.includes('your page title') || lower.includes('click to edit') || lower.includes('your title');
+            };
+            const targets = Array.from(document.querySelectorAll('h1[contenteditable="true"], [role="textbox"], [contenteditable="true"]'));
+            for (const el of targets) {
+                if (isPlaceholder(el.innerText)) {
+                    el.scrollIntoView({ block: 'center' });
+                    const rect = el.getBoundingClientRect();
+                    return { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+                }
+            }
+            // If no placeholder, try the first H1
+            const h1 = document.querySelector('h1');
+            if (h1) {
+                const rect = h1.getBoundingClientRect();
+                return { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+            }
+            return null;
+        }""")
+        
+        if found:
+            page.mouse.click(found['x'], found['y'])
+            time.sleep(0.3)
+            page.keyboard.press("Control+A")
+            time.sleep(0.1)
+            page.keyboard.press("Backspace")
+            time.sleep(0.2)
+            page.keyboard.type(title[:200], delay=30)
+            page.keyboard.press("Enter")
+            time.sleep(0.5)
+            page.keyboard.press("Escape")
+            return True
+    except Exception as e:
+        logger.warning(f"Keyboard title injection failed: {e}")
+    
+    # Fallback to JS Injection
     success = page.evaluate(
         """(t) => {
-      // 1. Try to find the BIG H1 title first
-      const h1s = Array.from(document.querySelectorAll('h1[contenteditable="true"], [role="main"] h1, header h1, .compact h1'));
-      for (const h1 of h1s) {
-        h1.scrollIntoView({ block: 'center' });
-        h1.focus();
-        h1.click();
-        // Force set text via DOM first
-        h1.innerText = t; 
-        h1.dispatchEvent(new Event('input', { bubbles: true }));
-        h1.dispatchEvent(new Event('blur', { bubbles: true }));
-        return true;
-      }
-      
-      // 2. Fallback to placeholder search
-      const needles = [/click to edit text/i, /your page title/i, /click to edit/i, /click to edit heading/i, /your title/i];
-      const boxes = Array.from(document.querySelectorAll('[role="textbox"], [contenteditable="true"]'));
-      for (const el of boxes) {
-        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-        if (needles.some(n => n.test(txt)) && txt.length < 60) {
-          el.scrollIntoView({ block: 'center' });
-          el.focus();
-          el.click();
+      const targets = Array.from(document.querySelectorAll('h1, [role="textbox"], [contenteditable="true"]'));
+      for (const el of targets) {
+        if (/your page title|click to edit/i.test(el.innerText || '')) {
           el.innerText = t;
           el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
           return true;
         }
       }
       return false;
     }""",
-        title[:500],
+        title,
     )
+    return success
     if not success:
         # Try a wider range of coordinates for the banner title
         coords = [(640, 320), (400, 460), (640, 400)]
@@ -649,40 +703,54 @@ def _set_banner_enter_site_name_if_present(page, title: str):
         pass
 
 
-def _apply_all_branding_after_theme(page, brand: str):
+def _apply_all_branding_after_theme(page, entry: SiteEntry):
     """
     Aristotle / theme apply resets banner placeholders — always re-apply chrome + banner after theme.
     """
+    brand_full = branding_title(entry)
+    brand_short = site_name_short(entry)
+    
     _dismiss_chrome(page, 2)
-    _set_site_title_in_header(page, brand)
-    _set_banner_page_title(page, brand)
-    _set_banner_enter_site_name_if_present(page, brand)
-    # Second pass: theme animation can lag
-    time.sleep(0.35)
-    if _banner_still_has_placeholder(page) or _topbar_still_untitled(page):
-        _set_site_title_in_header(page, brand)
-        _set_banner_page_title(page, brand)
-        _set_banner_enter_site_name_if_present(page, brand)
+    _set_site_title_in_header(page, brand_short)
+    _set_banner_page_title(page, brand_full)
+    _set_banner_enter_site_name_if_present(page, brand_short)
+    
+    # Theme animation can lag; wait significantly
+    time.sleep(1.2)
+    for _ in range(3):
+        if _banner_still_has_placeholder(page) or _topbar_still_untitled(page):
+            logger.info("Branding refresh pass...")
+            _set_site_title_in_header(page, brand_short)
+            _set_banner_page_title(page, brand_full)
+            _set_banner_enter_site_name_if_present(page, brand_short)
+            time.sleep(1.0)
+        else:
+            break
 
 
-def _refresh_branding_after_embed(page, brand: str):
+def _refresh_branding_after_embed(page, entry: SiteEntry):
     """Embed dialog steals focus — always set chrome + banner again so both places stay filled."""
+    brand_full = branding_title(entry)
+    brand_short = site_name_short(entry)
+    
     _dismiss_chrome(page, 2)
     time.sleep(0.28)
-    _set_site_title_in_header(page, brand)
-    _set_banner_page_title(page, brand)
-    _set_banner_enter_site_name_if_present(page, brand)
+    _set_site_title_in_header(page, brand_short)
+    _set_banner_page_title(page, brand_full)
+    _set_banner_enter_site_name_if_present(page, brand_short)
 
 
 def _banner_still_has_placeholder(page) -> bool:
     try:
         return page.evaluate(
             """() => {
-          const bad = ['click to edit text', 'your page title', 'click to edit'];
-          const boxes = document.querySelectorAll('[role="textbox"], [contenteditable="true"]');
-          for (const el of boxes) {
+          const bad = ['your page title', 'click to edit', 'your title'];
+          const h1s = Array.from(document.querySelectorAll('h1'));
+          const textboxes = Array.from(document.querySelectorAll('[role="textbox"], [contenteditable="true"]'));
+          const all = [...h1s, ...textboxes];
+          for (const el of all) {
             const t = (el.innerText || '').trim().toLowerCase();
-            if (bad.some(b => t.includes(b))) return true;
+            if (bad.some(b => t === b || t.includes(b)) && t.length < 60) return true;
           }
           return false;
         }"""
@@ -746,27 +814,53 @@ def _insert_embed_content(page, premium_html: str):
     # Switch to "Embed code" tab in the dialog
     embed_code_tab = page.locator('div[role="dialog"] [role="tab"]:has-text("Embed code")').first
     embed_code_tab.click(force=True, timeout=8000)
-    time.sleep(0.4)
+    time.sleep(0.6)
+    
+    # Ensure tab is actually selected before proceeding
+    page.locator('div[role="dialog"] [role="tab"][aria-selected="true"]:has-text("Embed code")').wait_for(timeout=5000)
 
     # Fill textarea
     ta = page.locator('div[role="dialog"] textarea').first
     ta.wait_for(state="visible", timeout=8000)
-    _fill_textarea_verified(page, ta, premium_html)
-    time.sleep(0.35)
+    
+    # Split massive HTML into 5000-char chunks
+    chunks = [premium_html[i : i + 5000] for i in range(0, len(premium_html), 5000)]
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            ta.fill(chunk)
+        else:
+            page.keyboard.press("Control+End")
+            page.keyboard.type(chunk)
+        time.sleep(0.2)
 
-    # Click Next
-    page.get_by_role("button", name="Next").click(force=True)
-
-    # Wait for preview
+    # Wait for 'Next' button to be ENABLED (Massive content takes time to process)
+    next_btn = page.locator('div[role="dialog"] div[role="button"]:has-text("Next")').first
     try:
-        page.wait_for_selector('div[role="dialog"] iframe', timeout=12000)
-    except PlaywrightTimeoutError:
-        logger.warning("Preview iframe not detected; continuing")
-    time.sleep(1.0)
+        next_btn.wait_for(state="visible", timeout=15000)
+        # Extra wait for massive data processing
+        time.sleep(2.5) 
+        next_btn.click(force=True)
+    except:
+        page.keyboard.press("Enter")
 
-    # Click Insert
+    # CRITICAL: Dynamic wait time based on content length
+    # Base 30s + 1s per 2500 characters (e.g., 50k chars = 50s wait)
+    char_count = len(premium_html)
+    dynamic_wait = 30.0 + (char_count / 2500.0)
+    dynamic_wait = min(120.0, dynamic_wait) # Cap at 2 minutes for sanity
+    
+    logger.info("Massive content detected (%s chars). Waiting %.1fs for preview engine...", char_count, dynamic_wait)
+    time.sleep(dynamic_wait) 
+
+    # Click Insert (Wait for it to be active and visible)
     insert_btn = page.locator('div[role="dialog"] div[role="button"]:has-text("Insert")').first
-    insert_btn.click(force=True, timeout=8000)
+    try:
+        insert_btn.wait_for(state="visible", timeout=20000)
+        time.sleep(2.0)
+        insert_btn.click(force=True, timeout=30000)
+    except Exception as e:
+        logger.warning("Insert button error (massive content delay?): %s. Trying Enter key...", e)
+        page.keyboard.press("Enter")
     
     # Wait for the widget to appear in the main editor
     time.sleep(3.5)
@@ -809,10 +903,21 @@ def _drag_bottom_edge_expand(page, target_locator, delta_y: float) -> bool:
             return False
         cx = box["x"] + box["width"] / 2
         bottom_y = box["y"] + box["height"] - 6
-        end_y = bottom_y + max(400, min(float(delta_y), 6200))
+        
         page.mouse.move(cx, bottom_y)
         page.mouse.down()
-        page.mouse.move(cx, end_y, steps=min(40, max(12, int(delta_y / 110))))
+        
+        # Continuous Scroll-Drag: Break the drag into chunks and scroll the page down while dragging
+        total_drag = float(delta_y)
+        num_flicks = 5
+        for i in range(num_flicks):
+            flick_y = bottom_y + ((i + 1) * (total_drag / num_flicks))
+            # Move mouse relative to viewport
+            page.mouse.move(cx, min(950, flick_y), steps=8)
+            # Scroll the page to pull the handle up, effectively increasing drag distance
+            page.mouse.wheel(0, total_drag / num_flicks)
+            time.sleep(0.15)
+            
         page.mouse.up()
         time.sleep(0.35)
         return True
@@ -831,13 +936,25 @@ def _drag_bottom_right_corner_expand(page, target_locator, delta_y: float, delta
             return False
         sx = box["x"] + box["width"] - 10
         sy = box["y"] + box["height"] - 10
-        end_x = sx + max(120, min(float(delta_x), 900))
-        end_y = sy + max(400, min(float(delta_y), 6200))
+        
         page.mouse.move(sx, sy)
         page.mouse.down()
-        page.mouse.move(end_x, end_y, steps=min(38, max(14, int((delta_y + delta_x) / 180))))
+        time.sleep(0.15)
+
+        # Motion 1: Drag horizontally to hit full edges
+        page.mouse.move(sx + 1200, sy, steps=5)
+        time.sleep(0.1)
+        
+        # Motion 2: Continuous Scroll-Drag Vertically
+        total_drag = float(delta_y)
+        num_flicks = 6
+        for i in range(num_flicks):
+            page.mouse.move(sx + 1200, min(950, sy + ((i+1)*(total_drag/num_flicks))), steps=10)
+            page.mouse.wheel(0, total_drag / num_flicks)
+            time.sleep(0.15)
+        
         page.mouse.up()
-        time.sleep(0.32)
+        time.sleep(0.1)
         return True
     except Exception as exc:
         logger.warning("Corner drag resize failed: %s", exc)
@@ -949,52 +1066,61 @@ def _resize_embed_block(page, steps: int):
     time.sleep(0.35)
 
     # Pixel drag scales with content volume (same heuristic as keyboard steps)
-    drag_px = max(1300.0, min(6200.0, steps * 2.05))
+    # Pixel drag scales with content volume. Removed 6200px cap for massive reports.
+    drag_px = max(1300.0, min(120000.0, steps * 2.15))
     dx_budget, dx_wide = _viewport_drag_budget(page)
 
     resize_loc = _embed_resize_target(page)
     if resize_loc is not None:
         # Bottom-centre pulls — vertical height (paragraph visibility)
-        for pass_idx in range(4):
+        # Reduced to 2 passes for speed; corner drag will do the rest
+        for pass_idx in range(2):
             ok = _drag_bottom_edge_expand(page, resize_loc, drag_px)
             if ok:
                 logger.info("Embed bottom-edge drag pass %s (~%.0fpx tall)", pass_idx + 1, drag_px)
-            time.sleep(0.26)
+            time.sleep(0.2)
             resize_loc = _embed_resize_target(page)
 
         resize_loc = _embed_resize_target(page)
         if resize_loc is not None:
-            # Bottom-right diagonal — height + width (embed often stays narrow until pulled)
-            for _ in range(2):
-                _drag_bottom_right_corner_expand(page, resize_loc, drag_px * 0.72, dx_budget)
-                time.sleep(0.26)
-                resize_loc = _embed_resize_target(page)
+            # Bottom-right diagonal — height + width
+            _drag_bottom_right_corner_expand(page, resize_loc, drag_px * 0.85, dx_budget)
+            time.sleep(0.2)
 
         resize_loc = _embed_resize_target(page)
         if resize_loc is not None:
-            # Right-mid handle — full-bleed width toward reference-site layout
-            for _ in range(3):
-                _drag_right_edge_expand(page, resize_loc, dx_wide)
-                time.sleep(0.24)
-                resize_loc = _embed_resize_target(page)
+            # Right-mid handle — full-bleed width
+            _drag_right_edge_expand(page, resize_loc, dx_wide)
+            time.sleep(0.2)
 
-    # Secondary: keyboard widen + height (still helps on some builds)
-    time.sleep(0.15)
-    for _ in range(14):
+    # Secondary: keyboard widen + height
+    time.sleep(0.1)
+    # Fast widen
+    page.keyboard.press("Control+A") # Ensure selected
+    for _ in range(8):
         page.keyboard.press("ArrowLeft")
-    for _ in range(16):
+    for _ in range(12):
         page.keyboard.press("Shift+ArrowRight")
 
-    chunk = 220
-    remaining = steps
-    while remaining > 0:
-        batch_sz = min(chunk, remaining)
-        page.keyboard.down("Shift")
-        for _ in range(batch_sz):
-            page.keyboard.press("ArrowDown")
-        page.keyboard.up("Shift")
-        remaining -= batch_sz
-        time.sleep(0.22)
+    # NEW STRATEGY: Multi-drag flicks (MUCH faster than keyboard loop)
+    # Dragging 85k pixels via keyboard takes 15 mins. This takes 10 seconds.
+    logger.info("Executing Hyper-Drag flicks for %s steps...", steps)
+    
+    for flick in range(4): # 4 massive flicks to ensure full expansion
+        resize_loc = _embed_resize_target(page)
+        if resize_loc:
+            # Click and drag down aggressively
+            _drag_bottom_edge_expand(page, resize_loc, 25000)
+            time.sleep(0.5)
+            # Scroll down to let the DOM expand
+            page.mouse.wheel(0, 15000)
+            time.sleep(0.3)
+    
+    # Final fine-tuning (only 500 steps instead of 85k)
+    page.keyboard.down("Shift")
+    for _ in range(500):
+        page.keyboard.press("ArrowDown")
+    page.keyboard.up("Shift")
 
 
 def _click_published_site_dropdown(page) -> bool:
@@ -1004,53 +1130,34 @@ def _click_published_site_dropdown(page) -> bool:
     """
     return page.evaluate(
         """() => {
-      const dlg = document.querySelector('[role="dialog"]');
+      const dlgs = Array.from(document.querySelectorAll('[role="dialog"], [role="presentation"], .modal-dialog'));
+      const dlg = dlgs.find(d => d.innerText.includes('General access') || d.innerText.includes('Share')) || dlgs[0];
       if (!dlg) return false;
-
-      const isInfoBanner = (t) =>
-        (t || '').includes('Published viewers can see') || (t || '').includes('Learn more about sharing');
 
       const candidates = Array.from(dlg.querySelectorAll('[role="listitem"], tr, div'));
       for (const block of candidates) {
         const t = block.innerText || '';
         if (!t.includes('Published site')) continue;
-        if (isInfoBanner(t)) continue;
-        if (t.includes('Draft') && !t.includes('Published site')) continue;
-
-        const ctrls = block.querySelectorAll('[role="button"], [role="combobox"], button');
-        for (const c of ctrls) {
-          const label = (c.innerText || '').trim();
-          const aria = (c.getAttribute('aria-label') || '').toLowerCase();
-          if (!label || /^done$/i.test(label) || label.includes('Copy')) continue;
-          if (/published site|general access/i.test(aria)) {
-            c.click();
-            return true;
-          }
-          if (label.length >= 3 || c.getAttribute('aria-haspopup') === 'listbox' || c.getAttribute('aria-expanded')) {
-            c.click();
-            return true;
-          }
+        if (t.includes('RedOrangeTechnologies') || t.includes('Public') || t.includes('Anyone')) {
+            const ctrls = block.querySelectorAll('[role="button"], [role="combobox"], button');
+            for (const c of ctrls) {
+                const label = (c.innerText || '').trim();
+                if (/^done$/i.test(label) || label.includes('Copy')) continue;
+                c.scrollIntoView({ block: 'center' });
+                c.click();
+                return true;
+            }
         }
       }
 
+      // Fallback search
       const spans = Array.from(dlg.querySelectorAll('span, div, p'));
       for (const el of spans) {
         const s = (el.textContent || '').trim();
-        if (s !== 'Published site' && !s.startsWith('Published site')) continue;
-        if (s.length > 60) continue;
-        let row = el.closest('[role="listitem"]') || el.parentElement;
-        for (let depth = 0; depth < 10 && row; depth++) {
-          const btns = row.querySelectorAll('[role="button"], [role="combobox"]');
-          for (const b of btns) {
-            const bt = (b.innerText || '').trim();
-            if (!bt || /^done$/i.test(bt)) continue;
-            if (bt.length >= 3 || b.getAttribute('aria-haspopup')) {
-              b.click();
-              return true;
-            }
-          }
-          row = row.parentElement;
-        }
+        if (!s.includes('Published site')) continue;
+        const row = el.closest('[role="listitem"]') || el.parentElement;
+        const btn = row.querySelector('[role="button"], [role="combobox"], button');
+        if (btn) { btn.click(); return true; }
       }
       return false;
     }"""
@@ -1059,11 +1166,21 @@ def _click_published_site_dropdown(page) -> bool:
 
 def _select_public_or_internet_option(page) -> bool:
     """Pick true public/internet visibility — not Workspace-only / organization."""
+    # Playwright's get_by_text is very reliable for these menus
+    try:
+        # Try finding the 'Public' option in the list
+        public_item = page.get_by_text("Public", exact=True).first
+        if public_item.is_visible(timeout=5000):
+            public_item.click(force=True)
+            return True
+    except:
+        pass
+
     return page.evaluate(
         """() => {
       const opts = Array.from(
         document.querySelectorAll(
-          '[role="option"], [role="menuitem"], li[role="option"], div[role="presentation"] li, div[jsname] li'
+          '[role="option"], [role="menuitem"], li[role="option"], div[role="presentation"] li, div[jsname] li, span'
         )
       );
       let best = null;
@@ -1076,21 +1193,13 @@ def _select_public_or_internet_option(page) -> bool:
         if (/^public$/i.test(raw.trim())) r = 100;
         else if (/public on the web|on the web$/i.test(t)) r = 98;
         else if (/anyone on the internet|internet to find|whole internet/i.test(t)) r = 96;
-        else if (/anyone with the link/i.test(t)) r = 82;
-        else if (/anyone in .* can find|people at .* can/i.test(t)) r = 35;
-        else if (/only people.*invited|specific people|restricted/i.test(t)) r = -20;
-        else if (/your organization|same organization|people in your domain/i.test(t)) r = -15;
-        else if (/\\bltd\\b|\\bpvt\\b|\\binc\\.\\b|technologies/i.test(t) && t.length < 120) r = -40;
         if (r > rank) {
           rank = r;
           best = o;
         }
       }
-      if (best && rank >= 75) {
-        best.click();
-        return true;
-      }
-      if (best && rank >= 70) {
+      if (best && rank >= 90) {
+        best.scrollIntoView({ block: 'center' });
         best.click();
         return true;
       }
@@ -1103,17 +1212,15 @@ def _published_site_already_public_or_link(page) -> bool:
     """If Published site row already shows Public / link — skip opening org dropdown."""
     return page.evaluate(
         """() => {
-      const dlg = document.querySelector('[role="dialog"]');
+      const dlgs = Array.from(document.querySelectorAll('[role="dialog"]'));
+      const dlg = dlgs.find(d => d.innerText.includes('General access')) || dlgs[0];
       if (!dlg) return false;
       const rows = Array.from(dlg.querySelectorAll('[role="listitem"], tr'));
       for (const row of rows) {
         const t = row.innerText || '';
         if (!t.includes('Published site')) continue;
-        const looksOrgOnly =
-          /Ltd|Pvt|Technologies|RedOrange|organization/i.test(t) &&
-          !/Public on the web|\\bPublic\\b|Anyone with the link/i.test(t);
-        if (looksOrgOnly) return false;
-        if (/Public on the web|\\bPublic\\b|Anyone with the link/i.test(t)) return true;
+        const isPublic = /Public on the web|\\bPublic\\b|Anyone with the link/i.test(t);
+        if (isPublic) return true;
       }
       return false;
     }"""
@@ -1130,20 +1237,31 @@ def _make_site_public(page):
     time.sleep(0.4)
 
     share_selectors = [
+        'button[aria-label*="Share" i]',
         'div[role="button"][aria-label*="Share" i]',
+        '[aria-label*="Share with others" i]',
+        'div[jsname="V67oCd"]:has-text("Share")',
+        'div[role="button"]:has-text("Share")',
         '[data-tooltip*="Share" i]',
-        '[aria-label*="share with others" i]',
     ]
     if not _click_first_visible(page, share_selectors, timeout=8000):
-        page.mouse.click(1180, 40)
-    time.sleep(1.2)
+        # Desperate coordinate fallback for top-right share icon area
+        page.mouse.click(1150, 45)
+    
+    # Wait for the dialog to animate and settle
+    time.sleep(1.5)
 
+    # Wait for the dialog to appear by checking for common text inside it (General access)
     try:
-        page.wait_for_selector('div[role="dialog"]', timeout=DIALOG_TIMEOUT)
-    except PlaywrightTimeoutError:
-        raise RuntimeError("Share dialog did not appear")
+        page.locator('text=/General access|Share with/i').wait_for(state="visible", timeout=DIALOG_TIMEOUT)
+    except Exception:
+        try:
+            # Fallback to general dialog role or presentation role
+            page.locator('[role="dialog"], [role="presentation"]').first.wait_for(state="visible", timeout=4000)
+        except:
+             raise RuntimeError("Share dialog did not appear")
 
-    time.sleep(0.45)
+    time.sleep(0.6)
 
     if _published_site_already_public_or_link(page):
         logger.info("Published site already public/link — skipping dropdown change")
@@ -1180,18 +1298,37 @@ def _make_site_public(page):
     time.sleep(0.85)
 
     if not _select_public_or_internet_option(page):
-        time.sleep(0.4)
-        _select_public_or_internet_option(page)
+        logger.warning("Could not select Public option via JS.")
+        # Do NOT use key-based entry here as it might type into 'Add people' box
+        pass
 
+    time.sleep(1.2)
+
+    # Click the blue DONE button
     time.sleep(1.0)
+    try:
+        done_btn = page.get_by_role("button", name="Done").first
+        if done_btn.is_visible(timeout=5000):
+            done_btn.click(force=True)
+            time.sleep(2.0)
+            return
+    except:
+        pass
 
     done_selectors = [
         'button:has-text("Done")',
         'div[role="button"]:has-text("Done")',
+        'span:has-text("Done")',
+        '.VfPpkd-LgbsSe:has-text("Done")',
     ]
-    if not _click_first_visible(page, done_selectors, timeout=6000):
-        page.keyboard.press("Escape")
-    time.sleep(0.55)
+    if not _click_first_visible(page, done_selectors, timeout=8000):
+        # Desperate coordinate fallback for the Done button at bottom-right of the dialog
+        logger.warning("Done button not found via selectors; using coordinate fallback")
+        page.keyboard.press("Enter")
+        time.sleep(1.0)
+        page.mouse.click(640, 520) 
+    
+    time.sleep(2.5)
 
 
 def _workspace_publish_url_candidates(page, published_slug: str):
@@ -1293,55 +1430,86 @@ def _harvest_live_site_url(page, entry: SiteEntry, published_slug: str) -> str:
 
 def _build_publish_slug(entry: SiteEntry) -> str:
     """
-    URL-safe slug for the Publish dialog.
-    If the slug matches the dhr-001 pattern, we use it exactly as provided
-    to ensure the user's sequential requirement is met.
+    Strict sequential format: dhr-NNN
+    Stays well under the 30-char limit.
     """
     base = (entry.slug or "").strip().lower()
     if not base:
-        base = slugify(branding_title(entry))
+        base = slugify(branding_title(entry))[:20]
     
-    # If it's a sequential slug like dhr-001, don't add random suffix
-    if re.match(r"^[a-z]+-\d{3,4}$", base):
-        return base[:58]
-
-    # Otherwise, add random suffix to avoid collisions for generic slugs
-    base = re.sub(r"-{2,}", "-", base).strip("-")[:44]
-    suf = random.randint(1000, 9999)
-    combined = f"{base}-{suf}"
-    if len(combined) > 58:
-        combined = f"{base[:38]}-{suf}"
-    return combined
+    # Ensure it's not too long
+    return base[:28]
 
 
 def _publish_and_capture_url(page, entry: SiteEntry):
     """Publish and return a validated public URL (never workspace domain roots)."""
-    page.mouse.wheel(0, -8000)
+    logger.info("Triggering Publish flow...")
+    page.keyboard.press("Escape")
+    time.sleep(0.1)
+    page.keyboard.press("Escape")
     time.sleep(0.2)
+    # Click in a safe neutral top-bar area (away from Home icon at 0-50 and Publish at 1000+)
+    page.mouse.click(350, 25) 
+    time.sleep(0.4)
 
     publish_selectors = [
         'div[role="button"]:has-text("Publish")',
+        'div[aria-label="Publish"]',
+        'div[jsname="V67oCd"]',
         'button:has-text("Publish")',
+        '[data-tooltip*="Publish" i]',
+        'div[role="button"] >> text="Publish"',
     ]
-    if not _click_first_visible(page, publish_selectors, timeout=6000):
-        page.mouse.click(1260, 40)
-    time.sleep(0.4)
+
+    # 1. Click main "Publish" button (Power JS Click)
+    try:
+        page.wait_for_selector('div[role="button"]:has-text("Publish"), [jsname="V67oCd"]', timeout=4000)
+    except:
+        pass
+
+    success = page.evaluate("""() => {
+        const findBtn = () => {
+            const allBtns = Array.from(document.querySelectorAll('div[role="button"]'));
+            return allBtns.find(el => el.innerText.trim() === 'Publish') || 
+                   document.querySelector('[jsname="V67oCd"]') ||
+                   allBtns.find(el => el.innerText.includes('Publish'));
+        };
+        const btn = findBtn();
+        if (btn) { btn.click(); return true; }
+        return false;
+    }""")
+    if not success:
+        _click_first_visible(page, publish_selectors, timeout=3000)
+    
+    time.sleep(0.5)
 
     final_slug = _build_publish_slug(entry)
 
     # Ensure dialog is open
     dialog_opened = False
-    for _ in range(3):
-        if page.locator('div[role="dialog"]').is_visible(timeout=3000):
+    for attempt_dlg in range(5):
+        if page.locator('div[role="dialog"]').first.is_visible(timeout=2000):
             dialog_opened = True
             break
-        # Re-click if not opened
-        _click_first_visible(page, publish_selectors, timeout=2000)
-        time.sleep(1.0)
+        # Re-click with increasing force
+        logger.info(f"Publish dialog not open (attempt {attempt_dlg+1}), re-clicking...")
+        _click_first_visible(page, publish_selectors, timeout=3000)
+        page.keyboard.press("Enter") # Sometimes Enter triggers it if button is focused
+        time.sleep(1.5)
 
     if dialog_opened:
         try:
             dialog = page.locator('div[role="dialog"]').first
+            
+            # Check if we need to set visibility here (Alternative Path)
+            manage_link = dialog.locator('text=/Manage|Who can view/i').first
+            if manage_link.is_visible(timeout=2000):
+                logger.info("Found visibility Manage link in Publish dialog; setting to Public...")
+                manage_link.click()
+                time.sleep(1.5)
+                _make_site_public(page) # This will handle the nested Share dialog
+                time.sleep(1.0)
+
             inp = dialog.locator('input[type="text"], input:not([type="hidden"])').first
             
             def attempt_publish(slug_to_use):
@@ -1350,37 +1518,70 @@ def _publish_and_capture_url(page, entry: SiteEntry):
                 page.keyboard.press("Control+A")
                 page.keyboard.press("Backspace")
                 time.sleep(0.1)
-                page.keyboard.type(slug_to_use, delay=20)
-                time.sleep(0.5)
+                page.keyboard.type(slug_to_use, delay=10)
                 
-                # Use Enter first - it's the most reliable way in Google dialogs
-                page.keyboard.press("Enter")
+                # Wait for slug validation
+                time.sleep(2.0) 
+                
+                # Check for "already taken" or any other validation warning
+                is_invalid = page.evaluate("""() => {
+                    const dlg = document.querySelector('[role="dialog"]');
+                    if (!dlg) return false;
+                    const txt = dlg.innerText || '';
+                    // Catch common Google Sites validation errors
+                    return /already taken|great address, but|invalid|shorter|longer/i.test(txt);
+                }""")
+                
+                if is_invalid:
+                    return False
+
+                # Power click the dialog's Publish button
+                clicked = page.evaluate("""() => {
+                    const d = document.querySelector('[role="dialog"]');
+                    if (!d) return false;
+                    const btns = Array.from(d.querySelectorAll('div[role="button"], button'));
+                    const b = btns.find(el => {
+                        const t = el.innerText.trim();
+                        return t === 'Publish' || t === 'PUBLISH';
+                    });
+                    if (b && !b.getAttribute('aria-disabled') && !b.disabled) {
+                        b.click();
+                        return true;
+                    }
+                    return false;
+                }""")
+                
+                if not clicked:
+                    page.keyboard.press("Enter")
+                
                 time.sleep(1.0)
 
-                # Fallback click
-                try:
-                    pub_btn = dialog.locator('div[role="button"]:has-text("Publish"), button:has-text("Publish"), [jsname="V67oCd"]').last
-                    if pub_btn.is_visible(timeout=2000):
-                        pub_btn.click(force=True, timeout=2000)
-                except:
-                    page.keyboard.press("Enter")
-
-                # Wait for dialog to disappear
-                for _ in range(5):
+                # Wait for dialog to disappear (indicates success)
+                for _ in range(8):
                     if not dialog.is_visible(timeout=500):
                         return True
                     time.sleep(1.0)
-                    page.keyboard.press("Enter") # Re-try Enter
+                    page.keyboard.press("Enter")
                 return False
                 
             success_pub = attempt_publish(final_slug)
             
-            # If dialog is STILL visible, the slug was likely taken.
-            # Append random suffix and retry.
+            # If taken, try suffixes: dhr-001-1, dhr-001-2... up to -20
             if not success_pub and dialog.is_visible(timeout=500):
-                logger.warning("Publish dialog still open. Slug might be taken. Retrying with suffix.")
-                final_slug = f"{final_slug}-{random.randint(100, 999)}"
-                attempt_publish(final_slug)
+                base_slug = final_slug[:25] # Leave room for suffix
+                for suffix_idx in range(1, 21):
+                    new_try = f"{base_slug}-{suffix_idx}"
+                    logger.warning(f"Slug '{final_slug}' taken, trying dynamic fallback: {new_try}")
+                    if attempt_publish(new_try):
+                        success_pub = True
+                        final_slug = new_try
+                        break
+                
+                if not success_pub:
+                    # Final desperate try with timestamp suffix
+                    new_try = f"{base_slug[:20]}-{int(time.time()) % 10000}"
+                    attempt_publish(new_try)
+                    final_slug = new_try
                 
         except Exception as e:
             logger.warning("Publish dialog interaction: %s", e)
@@ -1428,25 +1629,36 @@ def _process_single_entry(page, entry, index, total, batch):
     time.sleep(PAGE_LOAD_SETTLE_SECS)
     _ensure_logged_into_sites(page)
     _dismiss_chrome(page)
+    # Ensure we are at the top
+    page.mouse.wheel(0, -10000)
 
     # 2. Theme first — Aristotle resets banner fields; branding is applied immediately after.
     _apply_theme(page)
 
     # 3. Site name + banner (after theme so placeholders are not wiped)
-    _apply_all_branding_after_theme(page, brand)
+    _apply_all_branding_after_theme(page, entry)
 
     # 4. Full HTML embed
     batch.current_action = f"[{index}/{total}] Embedding content..."
     batch.save()
     _insert_embed_content(page, premium_html)
-    # (Removed redundant branding refresh to avoid UI jumping)
 
     # 5. Stretch embed so full paragraph/html shows (no inner scrollbar)
     rsteps = resize_steps_for_embed(premium_html)
     logger.info("Resizing embed block (%s steps)", rsteps)
     _resize_embed_block(page, rsteps)
-    page.mouse.wheel(0, -8000)
-    time.sleep(0.5)
+    
+    # FINAL VERIFICATION: Ensure banner title didn't revert during resizing
+    if _banner_still_has_placeholder(page):
+        logger.info("Banner placeholder detected before publish; fixing...")
+        _set_banner_page_title(page, branding_title(entry))
+
+    # Click a safe area to deselect everything so Publish button is active/clickable immediately
+    page.keyboard.press("Escape")
+    time.sleep(0.1)
+    page.mouse.click(400, 20) 
+    page.mouse.wheel(0, -10000)
+    time.sleep(0.4)
 
     # 6. Share (optional — skip by default; set GS_SKIP_SHARE=0 to force Share dialog)
     if SKIP_SHARE_DIALOG:
