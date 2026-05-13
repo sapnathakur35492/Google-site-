@@ -97,48 +97,40 @@ def _ensure_logged_into_sites(page):
     Stays open and WAITS indefinitely if Google asks for login. 
     Does not close chrome until user manually signs in.
     """
-    logger.info("Verifying Google session...")
+    logger.info("Verifying Google session (Manual Login Mode)...")
     
     # Increase timeout for manual login phase
     original_timeout = page.default_timeout
-    page.set_default_timeout(0) # 0 means no timeout
+    page.set_default_timeout(0) 
     
-    try:
-        # Initial navigation to force login check
-        if "sites.google.com" not in (page.url or ""):
-            page.goto("https://sites.google.com/u/0/create?template=blank&authuser=0")
-
-        while True:
+    while True:
+        try:
             u = page.url or ""
-            # Detect Google login screens
-            if "accounts.google.com" in u and ("signin" in u.lower() or "v2/identifier" in u.lower()):
-                logger.warning("GOOGLE LOGIN REQUIRED: Chrome will stay open. Please type your Email/Password manually in the browser window now.")
-                time.sleep(5.0) 
-                continue
             
-            # Detect 'Verify it's you' or other intermediate screens
-            if "challenge" in u.lower() or "recovery" in u.lower():
-                logger.warning("GOOGLE CHALLENGE DETECTED: Please complete the manual verification in the browser window.")
-                time.sleep(5.0)
-                continue
-
-            # If we are in the editor or create page, we are good
-            if "sites.google.com" in u and "create" in u:
+            # 1. If we are already on a Google Sites page, we are good to go!
+            if "sites.google.com" in u and ("create" in u or "home" in u or "d/" in u):
                 logger.info("Login confirmed! Proceeding with automation...")
                 page.set_default_timeout(original_timeout)
                 return
+
+            # 2. If we are on a login/challenge page, just wait and log
+            if "accounts.google.com" in u:
+                logger.warning("GOOGLE LOGIN/VERIFICATION REQUIRED: Chrome will stay open. Please complete login manually in the browser window.")
+                time.sleep(5.0)
+                continue
+
+            # 3. If we are lost or on about:blank, try to go to Google Sites
+            logger.info("Navigating to Google Sites to trigger login check...")
+            try:
+                page.goto("https://sites.google.com/u/0/create?template=blank&authuser=0", timeout=0)
+            except Exception as nav_err:
+                logger.debug("Navigation sync issue (expected during redirect): %s", nav_err)
             
-            # If we are just at the dashboard
-            if "sites.google.com" in u:
-                logger.info("Login confirmed! Proceeding...")
-                page.set_default_timeout(original_timeout)
-                return
-            
-            time.sleep(2.0)
-    except Exception as e:
-        logger.warning("Login wait loop issue: %s", e)
-        # Reset timeout just in case
-        page.set_default_timeout(original_timeout)
+            time.sleep(3.0)
+
+        except Exception as e:
+            logger.warning("Waiting for manual login... (Do not close Chrome): %s", e)
+            time.sleep(5.0)
 
 
 def _grant_clipboard(page):
