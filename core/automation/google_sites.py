@@ -5,12 +5,8 @@ import os
 import random
 import re
 import time
-import traceback
 from functools import wraps
 from urllib.parse import urlparse
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from django.utils.text import slugify
 
@@ -97,43 +93,52 @@ def _smart_wait(page, timeout_ms=8000):
 
 
 def _ensure_logged_into_sites(page):
-    """Fail fast if Google redirects to account login (session expired)."""
+    """
+    Stays open and WAITS indefinitely if Google asks for login. 
+    Does not close chrome until user manually signs in.
+    """
+    logger.info("Verifying Google session...")
+    
+    # Increase timeout for manual login phase
+    original_timeout = page.default_timeout
+    page.set_default_timeout(0) # 0 means no timeout
+    
     try:
-        u = page.url or ""
-        if "accounts.google.com" in u and "signin" in u.lower():
-            # Try to automate login using .env credentials
-            _login_to_google(page)
+        # Initial navigation to force login check
+        if "sites.google.com" not in (page.url or ""):
+            page.goto("https://sites.google.com/u/0/create?template=blank&authuser=0")
+
+        while True:
+            u = page.url or ""
+            # Detect Google login screens
+            if "accounts.google.com" in u and ("signin" in u.lower() or "v2/identifier" in u.lower()):
+                logger.warning("GOOGLE LOGIN REQUIRED: Chrome will stay open. Please type your Email/Password manually in the browser window now.")
+                time.sleep(5.0) 
+                continue
+            
+            # Detect 'Verify it's you' or other intermediate screens
+            if "challenge" in u.lower() or "recovery" in u.lower():
+                logger.warning("GOOGLE CHALLENGE DETECTED: Please complete the manual verification in the browser window.")
+                time.sleep(5.0)
+                continue
+
+            # If we are in the editor or create page, we are good
+            if "sites.google.com" in u and "create" in u:
+                logger.info("Login confirmed! Proceeding with automation...")
+                page.set_default_timeout(original_timeout)
+                return
+            
+            # If we are just at the dashboard
+            if "sites.google.com" in u:
+                logger.info("Login confirmed! Proceeding...")
+                page.set_default_timeout(original_timeout)
+                return
+            
+            time.sleep(2.0)
     except Exception as e:
-        logger.warning("Automated login attempt failed: %s", e)
-
-
-def _login_to_google(page):
-    """Perform automated Google login using .env credentials."""
-    email = os.getenv("GMAIL_EMAIL")
-    password = os.getenv("GMAIL_PASSWORD")
-
-    if not email or not password:
-        logger.error("GMAIL_EMAIL or GMAIL_PASSWORD not found in .env file.")
-        return
-
-    logger.info("Attempting automated Google login for: %s", email)
-    try:
-        # 1. Email field
-        page.locator('input[type="email"]').fill(email)
-        page.keyboard.press("Enter")
-        time.sleep(2.5)
-
-        # 2. Password field
-        # Sometimes it takes a moment to appear
-        pwd_field = page.locator('input[type="password"]')
-        pwd_field.wait_for(state="visible", timeout=10000)
-        pwd_field.fill(password)
-        page.keyboard.press("Enter")
-        time.sleep(3.0)
-
-        logger.info("Login credentials submitted.")
-    except Exception as e:
-        logger.warning("Login interaction issue: %s", e)
+        logger.warning("Login wait loop issue: %s", e)
+        # Reset timeout just in case
+        page.set_default_timeout(original_timeout)
 
 
 def _grant_clipboard(page):
@@ -1754,6 +1759,10 @@ def run_automation(batch_id):
                 return ctx, pg
 
             context, page = launch_ctx()
+            
+            # CRITICAL: Wait for manual login BEFORE starting the loop
+            _ensure_logged_into_sites(page)
+            
             total = len(entries_list)
 
             for index, entry in enumerate(entries_list, 1):
