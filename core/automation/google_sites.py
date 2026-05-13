@@ -5,6 +5,7 @@ import os
 import random
 import re
 import time
+import traceback
 from functools import wraps
 from urllib.parse import urlparse
 
@@ -100,7 +101,6 @@ def _ensure_logged_into_sites(page):
     logger.info("Verifying Google session (Manual Login Mode)...")
     
     # Increase timeout for manual login phase
-    original_timeout = page.default_timeout
     page.set_default_timeout(0) 
     
     while True:
@@ -110,7 +110,8 @@ def _ensure_logged_into_sites(page):
             # 1. If we are already on a Google Sites page, we are good to go!
             if "sites.google.com" in u and ("create" in u or "home" in u or "d/" in u):
                 logger.info("Login confirmed! Proceeding with automation...")
-                page.set_default_timeout(original_timeout)
+                # Reset to standard timeout (45 seconds)
+                page.set_default_timeout(45000)
                 return
 
             # 2. If we are on a login/challenge page, just wait and log
