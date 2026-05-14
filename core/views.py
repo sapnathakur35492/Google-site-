@@ -6,7 +6,12 @@ from django.contrib import messages
 from .models import SiteBatch, SiteEntry
 import pandas as pd
 import threading
+import os
+from dotenv import load_dotenv
 from .automation.google_sites import run_automation
+
+load_dotenv()
+SLUG_PREFIX = os.getenv("SLUG_PREFIX", "dhr")
 
 
 class DashboardView(View):
@@ -95,8 +100,8 @@ class UploadBatchView(View):
                 if not pd.isna(slug_val) and str(slug_val).strip() and str(slug_val).lower() != 'nan':
                     slug = slugify(str(slug_val))[:80]
                 else:
-                    # Use sequential counter with 'dhr-' prefix as requested
-                    slug = f"dhr-{str(created_count + 1).zfill(3)}"
+                    # Use sequential counter with SLUG_PREFIX
+                    slug = f"{SLUG_PREFIX}-{str(created_count + 1).zfill(2)}"
 
                 # Handle optional columns dynamically
                 outbound_link = row.get('outbound_link', None)

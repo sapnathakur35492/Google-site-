@@ -12,6 +12,10 @@ from urllib.parse import urlparse
 from django.utils.text import slugify
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from dotenv import load_dotenv
+
+# Load configuration from .env file
+load_dotenv()
 
 from ..models import SiteBatch, SiteEntry
 
@@ -39,7 +43,10 @@ SCREENSHOTS_DIR = os.path.abspath(os.path.join(os.getcwd(), "debug_screenshots")
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
 # Enforce Public visibility for phone/external access
-SKIP_SHARE_DIALOG = False
+SKIP_SHARE_DIALOG = True
+
+# Prefix for site slugs (e.g. 'dhr', 'santosh', 'manish') for multi-system uniqueness
+SLUG_PREFIX = os.getenv("SLUG_PREFIX", "dhr")
 
 
 # ===================================================================
@@ -132,6 +139,17 @@ def _ensure_logged_into_sites(page):
         except Exception as e:
             logger.warning("Waiting for manual login... (Do not close Chrome): %s", e)
             time.sleep(5.0)
+
+
+def _wait_for_editor_ready(page):
+    """Wait for the Google Sites editor panels to be visible."""
+    logger.info("Waiting for editor UI panels to be ready...")
+    try:
+        # Wait for the main editor tablist to appear
+        page.locator('[role="tablist"]:has-text("Insert")').wait_for(state="visible", timeout=15000)
+        time.sleep(1.0)
+    except Exception as e:
+        logger.warning("Editor panels taking too long to load: %s", e)
 
 
 def _grant_clipboard(page):
@@ -939,10 +957,13 @@ def _drag_bottom_edge_expand(page, target_locator, delta_y: float) -> bool:
         # Continuous Scroll-Drag: Break the drag into chunks and scroll the page down while dragging
         total_drag = float(delta_y)
         num_flicks = 5
+        vp = page.viewport_size
+        max_v_y = vp["height"] - 40 if vp else 900
+        
         for i in range(num_flicks):
             flick_y = bottom_y + ((i + 1) * (total_drag / num_flicks))
             # Move mouse relative to viewport
-            page.mouse.move(cx, min(950, flick_y), steps=8)
+            page.mouse.move(cx, min(max_v_y, flick_y), steps=8)
             # Scroll the page to pull the handle up, effectively increasing drag distance
             page.mouse.wheel(0, total_drag / num_flicks)
             time.sleep(0.15)
@@ -1041,15 +1062,33 @@ def _resize_embed_block(page, steps: int):
 
     selected = False
 
-    for sel in section_candidates:
-        try:
-            loc = page.locator(sel).last
-            if loc.count() > 0:
-                loc.click(force=True, timeout=4000)
-                selected = True
-                break
-        except Exception:
-            continue
+    # 1. Power Select — JS search for the section containing our iframe
+    selected = page.evaluate("""() => {
+        const iframes = Array.from(document.querySelectorAll('iframe'));
+        const target = iframes.find(f => f.src.includes('blob:') || f.srcdoc || f.src.includes('googleusercontent'));
+        if (target) {
+            const section = target.closest('[data-section-id], section, [role="region"]');
+            if (section) {
+                section.scrollIntoView({ block: 'center' });
+                section.click();
+                return true;
+            }
+            target.click();
+            return true;
+        }
+        return false;
+    }""")
+
+    if not selected:
+        for sel in section_candidates:
+            try:
+                loc = page.locator(sel).last
+                if loc.count() > 0:
+                    loc.click(force=True, timeout=3000)
+                    selected = True
+                    break
+            except Exception:
+                continue
 
     if not selected:
         try:
@@ -1369,6 +1408,10 @@ def _workspace_publish_url_candidates(page, published_slug: str):
         dom = m.group(1)
         candidates.append(f"https://sites.google.com/a/{dom}/{published_slug}/home")
         candidates.append(f"https://sites.google.com/a/{dom}/{published_slug}")
+    
+    # User's specific workspace domain fallback
+    candidates.append(f"https://sites.google.com/redorangetechnologies.com/{published_slug}/home")
+    candidates.append(f"https://sites.google.com/redorangetechnologies.com/{published_slug}")
     return candidates
 
 
@@ -1406,7 +1449,9 @@ def _harvest_live_site_url(page, entry: SiteEntry, published_slug: str) -> str:
             return ""
         u = u.strip().split()[0].split("?")[0].rstrip("/")
         if _looks_like_valid_published_url(u):
-            return u
+            # CRITICAL: Prevent returning stale clipboard URL from previous sites
+            if published_slug.lower() in u.lower():
+                return u
         return ""
 
     while time.time() < deadline:
@@ -1530,27 +1575,26 @@ def _publish_and_capture_url(page, entry: SiteEntry):
         try:
             dialog = page.locator('div[role="dialog"]').first
             
-            # Visibility setting skipped to go direct to publishing
-            # manage_link = dialog.locator('text=/Manage|Who can view/i').first
-            # if manage_link.is_visible(timeout=2000):
-            #     logger.info("Found visibility Manage link in Publish dialog; setting to Public...")
-            #     manage_link.click()
-            #     time.sleep(1.5)
-            #     _make_site_public(page) # This will handle the nested Share dialog
-            #     time.sleep(1.0)
-
             inp = dialog.locator('input[type="text"], input:not([type="hidden"])').first
             
             def attempt_publish(slug_to_use):
-                inp.click(timeout=3000)
-                time.sleep(0.2)
-                page.keyboard.press("Control+A")
-                page.keyboard.press("Backspace")
-                time.sleep(0.1)
-                page.keyboard.type(slug_to_use, delay=10)
+                logger.info(f"Attempting to set slug: {slug_to_use}")
+                try:
+                    inp.click(timeout=3000)
+                    inp.fill(slug_to_use)
+                except:
+                    # Direct JS fallback if Playwright click/fill fails
+                    page.evaluate("""(data) => {
+                        const i = document.querySelector('[role="dialog"] input[type="text"]');
+                        if (i) {
+                            i.value = data.slug;
+                            i.dispatchEvent(new Event('input', { bubbles: true }));
+                            i.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    }""", {"slug": slug_to_use})
                 
-                # Wait for slug validation
-                time.sleep(2.0) 
+                # Wait for slug validation (Google's spinner to stop)
+                time.sleep(2.5) 
                 
                 # Check for "already taken" or any other validation warning
                 is_invalid = page.evaluate("""() => {
@@ -1594,6 +1638,13 @@ def _publish_and_capture_url(page, entry: SiteEntry):
                 return False
                 
             success_pub = attempt_publish(final_slug)
+            
+            if success_pub:
+                # Wait for the site to settle after publish
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except:
+                    pass
             
             # If taken, try suffixes: dhr-001-1, dhr-001-2... up to -20
             if not success_pub and dialog.is_visible(timeout=500):
@@ -1654,6 +1705,9 @@ def _process_single_entry(page, entry, index, total, batch):
         "https://sites.google.com/u/0/create?template=blank&authuser=0",
         wait_until="domcontentloaded",
     )
+    
+    # Ensure editor is ready (very important for background mode)
+    _wait_for_editor_ready(page)
     _smart_wait(page, timeout_ms=12000)
     time.sleep(PAGE_LOAD_SETTLE_SECS)
     _ensure_logged_into_sites(page)
@@ -1675,6 +1729,7 @@ def _process_single_entry(page, entry, index, total, batch):
     # 5. Stretch embed so full paragraph/html shows (no inner scrollbar)
     rsteps = resize_steps_for_embed(premium_html)
     logger.info("Resizing embed block (%s steps)", rsteps)
+    time.sleep(1.0) # Settle time for iframe
     _resize_embed_block(page, rsteps)
     
     # FINAL VERIFICATION: Ensure banner title didn't revert during resizing
@@ -1718,52 +1773,83 @@ def run_automation(batch_id):
 
     try:
         batch = SiteBatch.objects.get(id=batch_id)
-        entries_list = list(batch.entries.filter(status="pending"))
+        # 100% Dynamic Resume: Pick up everything except 'success' (handles pending, failed, and stuck 'processing' states)
+        entries_list = list(batch.entries.exclude(status="success").order_by('id'))
+        
+        total_all = batch.entries.count()
+        completed_count = batch.entries.filter(status="success").count()
 
         if not entries_list:
             batch.status = "completed"
-            batch.current_action = "No pending entries."
+            batch.current_action = f"All {total_all} sites already finished."
             batch.save()
             return
 
         user_data_dir = os.path.abspath(os.path.join(os.getcwd(), "google_session"))
-        logger.info("Starting bulk engine for %s row(s)", len(entries_list))
+        logger.info("Starting bulk engine. Resuming from site %s of %s", completed_count + 1, total_all)
         
-        batch.current_action = f"Initializing engine for {len(entries_list)} sites..."
+        batch.status = "processing"
+        batch.current_action = f"Resuming from site {completed_count + 1} of {total_all}..."
         batch.save()
 
         with sync_playwright() as p:
-            def launch_ctx():
-                logger.info("Launching/Restarting browser context...")
-                batch.current_action = "Launching browser (Playwright)..."
+            def launch_ctx(is_headless=False):
+                logger.info("Launching browser context (Headless=%s)...", is_headless)
+                batch.current_action = f"Launching browser (Headless={is_headless})..."
                 batch.save()
+                # Optimized flags for Google Sites Editor to render correctly and prevent Lock Screen freezes
+                launch_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    # Anti-Throttling: Prevents Windows from pausing Chrome when screen is locked or window is minimized
+                    "--disable-renderer-backgrounding",
+                    "--disable-background-timer-throttling",
+                    "--disable-backgrounding-occluded-windows",
+                ]
+                
+                if is_headless:
+                    # Move window far off-screen so it's invisible but fully rendered for Google
+                    launch_args.extend([
+                        "--window-position=5000,5000",
+                        "--window-size=1920,1080",
+                    ])
+                else:
+                    launch_args.append("--start-maximized")
+
                 ctx = p.chromium.launch_persistent_context(
                     user_data_dir=user_data_dir,
-                    headless=False,
+                    channel="chrome", # CRITICAL: Use REAL Google Chrome
+                    headless=False, # WE USE HEADED BUT OFF-SCREEN because true headless is blocked by Google Sites
                     slow_mo=0,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--start-maximized",
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                    ],
-                    no_viewport=True,
+                    args=launch_args,
+                    viewport={"width": 1920, "height": 1080} if is_headless else None,
+                    no_viewport=not is_headless,
                 )
                 pg = ctx.pages[0]
                 pg.set_default_timeout(45000)
                 _grant_clipboard(pg)
                 return ctx, pg
 
-            context, page = launch_ctx()
+            # 1. Start in HEADED mode (User can watch or log in)
+            context, page = launch_ctx(is_headless=False)
             
-            # CRITICAL: Wait for manual login BEFORE starting the loop
+            # CRITICAL: Wait for manual login
             _ensure_logged_into_sites(page)
             
-            total = len(entries_list)
+            logger.info("Login confirmed. Automation will continue in this window. "
+                        "If you close this window manually, it will automatically switch to Background mode.")
+            batch.current_action = "Running in browser (Close window to go background)..."
+            batch.save()
+            
+            # Note: We no longer close the context here. 
+            # The loop below will handle relaunching in headless mode if 'page.is_closed()' is detected.
+            
+            total = total_all
 
-            for index, entry in enumerate(entries_list, 1):
-                # FORCE sequential slug dhr-001, dhr-002...
-                new_slug = f"dhr-{str(index).zfill(3)}"
+            for index, entry in enumerate(entries_list, completed_count + 1):
+                # FORCE sequential slug based on prefix (e.g. dhr-001, santosh-001)
+                new_slug = f"{SLUG_PREFIX}-{str(index).zfill(2)}"
                 if entry.slug != new_slug:
                     entry.slug = new_slug
                     entry.save()
@@ -1775,11 +1861,16 @@ def run_automation(batch_id):
                     batch.save()
                     context.close()
                     time.sleep(2.0)
-                    context, page = launch_ctx()
+                    context, page = launch_ctx(is_headless=True)
 
                 if page.is_closed():
-                    logger.error("Page closed unexpectedly; attempting to relaunch")
-                    context, page = launch_ctx()
+                    logger.info("Browser window closed (User action); switching to Background mode...")
+                    try:
+                        context.close()
+                        time.sleep(1.0)
+                    except:
+                        pass
+                    context, page = launch_ctx(is_headless=True)
 
                 # Refresh entry from DB
                 current_entry = SiteEntry.objects.get(id=entry.id)
@@ -1790,6 +1881,18 @@ def run_automation(batch_id):
                 last_error = ""
 
                 for attempt in range(1, MAX_RETRIES_PER_ENTRY + 1):
+                    # SELF-HEALING: If user closed the window, relaunch in Background mode before starting the attempt
+                    if page.is_closed() or context.pages == []:
+                        logger.info("Browser window closed (Attempt %s); auto-switching to Invisible Background mode...", attempt)
+                        try:
+                            context.close()
+                            time.sleep(1.5)
+                        except:
+                            pass
+                        context, page = launch_ctx(is_headless=True)
+                        # CRITICAL: Re-verify session immediately after relaunching in background
+                        _ensure_logged_into_sites(page)
+
                     try:
                         url = _process_single_entry(page, current_entry, index, total, batch)
 
