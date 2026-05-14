@@ -257,3 +257,20 @@ class BatchStatusAPIView(View):
             'current_action': batch.current_action or '',
             'entries': entries,
         })
+
+
+class DeleteBatchView(View):
+    """Permanently remove a batch and all its associated site entries."""
+    def post(self, request, batch_id):
+        batch = get_object_or_404(SiteBatch, id=batch_id)
+        
+        # Prevent deletion of active jobs to avoid engine crashes
+        if batch.status == 'processing':
+            messages.error(request, 'Cannot delete a batch that is currently processing!')
+            return redirect('dashboard')
+            
+        batch_id_num = batch.id
+        batch.delete()
+        
+        messages.success(request, f'Batch #{batch_id_num} and all its data have been removed.')
+        return redirect('dashboard')

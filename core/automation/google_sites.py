@@ -337,7 +337,7 @@ def build_premium_embed_html(entry: SiteEntry) -> str:
     return (
         '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         '</head>'
-        '<body style="margin:0;padding:0;overflow:hidden;">'
+        '<body style="margin:0;padding:0;overflow:visible;">'
         '<div style="font-family:\'Segoe UI\',Roboto,Arial,sans-serif;color:#212121;'
         'line-height:1.65;font-size:16px;max-width:960px;margin:0 auto;padding:12px 24px 120px;box-sizing:border-box;width:100%;height:auto;overflow:visible;">'
         f'<div style="font-size:1.05rem;margin-bottom:12px;color:#374151;">{TEASER_LINE}</div>'
@@ -357,7 +357,10 @@ def build_premium_embed_html(entry: SiteEntry) -> str:
         '#embedded-main span{max-width:100%}'
         '#embedded-main strong,#embedded-main b{max-width:100%}'
         '#embedded-main em,#embedded-main i{max-width:100%}'
-        'body,html{overflow:visible!important;height:auto!important}'
+        'body,html{overflow-x:hidden!important;overflow-y:visible!important;height:auto!important}'
+        '/* Hide scrollbars across all browsers but keep content scrollable by mouse if needed */'
+        'body::-webkit-scrollbar, *::-webkit-scrollbar { display: none !important; }'
+        'body, * { -ms-overflow-style: none !important; scrollbar-width: none !important; }'
         '</style></body></html>'
     )
 
@@ -1527,14 +1530,14 @@ def _publish_and_capture_url(page, entry: SiteEntry):
         try:
             dialog = page.locator('div[role="dialog"]').first
             
-            # Check if we need to set visibility here (Alternative Path)
-            manage_link = dialog.locator('text=/Manage|Who can view/i').first
-            if manage_link.is_visible(timeout=2000):
-                logger.info("Found visibility Manage link in Publish dialog; setting to Public...")
-                manage_link.click()
-                time.sleep(1.5)
-                _make_site_public(page) # This will handle the nested Share dialog
-                time.sleep(1.0)
+            # Visibility setting skipped to go direct to publishing
+            # manage_link = dialog.locator('text=/Manage|Who can view/i').first
+            # if manage_link.is_visible(timeout=2000):
+            #     logger.info("Found visibility Manage link in Publish dialog; setting to Public...")
+            #     manage_link.click()
+            #     time.sleep(1.5)
+            #     _make_site_public(page) # This will handle the nested Share dialog
+            #     time.sleep(1.0)
 
             inp = dialog.locator('input[type="text"], input:not([type="hidden"])').first
             
