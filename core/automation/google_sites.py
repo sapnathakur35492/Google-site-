@@ -32,12 +32,14 @@ TEASER_LINE = "\U0001f4ca\U0001f4e9 Access Comprehensive Industry Insights"
 MAX_RETRIES_PER_ENTRY = 2
 STEP_TIMEOUT = 15000          # ms – per-element interaction
 DIALOG_TIMEOUT = 12000
-URL_POLL_SECS = 20.0          # total time to poll DOM for published URL
-# Settle times (reduced for hyper-speed)
-PAGE_LOAD_SETTLE_SECS = 0.5
-INTER_ENTRY_PAUSE = 0.5
-PUBLISH_SETTLE_SECS = 0.5
+URL_POLL_SECS = 8.0           # poll for published URL (was 20s+)
+EMBED_PREVIEW_MAX_SECS = 16.0 # max wait for embed preview iframe (was 30–120s blind sleep)
+PAGE_LOAD_SETTLE_SECS = 0.35
+INTER_ENTRY_PAUSE = 0.35
+PUBLISH_SETTLE_SECS = 0.6
+PUBLISH_SLUG_WAIT_SECS = 0.65
 SHORT_TIMEOUT = 5000
+NETWORK_IDLE_MS = 5000        # was 12000 on every new site
 
 SCREENSHOTS_DIR = os.path.abspath(os.path.join(os.getcwd(), "debug_screenshots"))
 os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
@@ -146,8 +148,8 @@ def _wait_for_editor_ready(page):
     logger.info("Waiting for editor UI panels to be ready...")
     try:
         # Wait for the main editor tablist to appear
-        page.locator('[role="tablist"]:has-text("Insert")').wait_for(state="visible", timeout=15000)
-        time.sleep(1.0)
+        page.locator('[role="tablist"]:has-text("Insert")').wait_for(state="visible", timeout=12000)
+        time.sleep(0.2)
     except Exception as e:
         logger.warning("Editor panels taking too long to load: %s", e)
 
@@ -283,7 +285,7 @@ def _verify_public_page_loads(page, url: str, expected_text: str = "") -> bool:
     if not url or "sites.google.com" not in url:
         return False
     try:
-        response = page.request.get(url, timeout=12000)
+        response = page.request.get(url, timeout=6000)
         if response.status == 200:
             if "accounts.google.com" in response.url:
                 return False
@@ -389,10 +391,9 @@ def _html_text_len_approx(html_blob: str) -> int:
 
 
 def resize_steps_for_embed(html_blob: str) -> int:
-    chars = len(html_blob or "")
-    # Aggressive scaling: ~3 steps per char + 3500 buffer
-    steps = int(chars * 3.1) + 3500
-    return max(3500, min(85000, steps))
+    """Heuristic for mouse-drag height only (no large keyboard loops)."""
+    n = _html_text_len_approx(html_blob)
+    return max(500, min(2200, int(math.ceil(n / 55.0) * 14)))
 
 
 # ===================================================================
@@ -856,12 +857,11 @@ def _insert_embed_content(page, premium_html: str):
     if not _click_first_visible(page, embed_selectors, timeout=8000):
         raise RuntimeError("Could not find Embed button in Insert panel")
 
-    time.sleep(0.6)
+    time.sleep(0.35)
 
-    # Switch to "Embed code" tab in the dialog
     embed_code_tab = page.locator('div[role="dialog"] [role="tab"]:has-text("Embed code")').first
     embed_code_tab.click(force=True, timeout=8000)
-    time.sleep(0.6)
+    time.sleep(0.35)
     
     # Ensure tab is actually selected before proceeding
     page.locator('div[role="dialog"] [role="tab"][aria-selected="true"]:has-text("Embed code")').wait_for(timeout=5000)
@@ -870,48 +870,37 @@ def _insert_embed_content(page, premium_html: str):
     ta = page.locator('div[role="dialog"] textarea').first
     ta.wait_for(state="visible", timeout=8000)
     
-    # Split massive HTML into 5000-char chunks
-    chunks = [premium_html[i : i + 5000] for i in range(0, len(premium_html), 5000)]
-    for i, chunk in enumerate(chunks):
-        if i == 0:
-            ta.fill(chunk)
-        else:
-            page.keyboard.press("Control+End")
-            page.keyboard.type(chunk)
-        time.sleep(0.2)
+    _fill_textarea_verified(page, ta, premium_html)
 
-    # Wait for 'Next' button to be ENABLED (Massive content takes time to process)
     next_btn = page.locator('div[role="dialog"] div[role="button"]:has-text("Next")').first
     try:
-        next_btn.wait_for(state="visible", timeout=15000)
-        # Extra wait for massive data processing
-        time.sleep(2.5) 
+        next_btn.wait_for(state="visible", timeout=12000)
+        time.sleep(0.35)
         next_btn.click(force=True)
-    except:
+    except Exception:
         page.keyboard.press("Enter")
 
-    # CRITICAL: Dynamic wait time based on content length
-    # Base 30s + 1s per 2500 characters (e.g., 50k chars = 50s wait)
-    char_count = len(premium_html)
-    dynamic_wait = 30.0 + (char_count / 2500.0)
-    dynamic_wait = min(120.0, dynamic_wait) # Cap at 2 minutes for sanity
-    
-    logger.info("Massive content detected (%s chars). Waiting %.1fs for preview engine...", char_count, dynamic_wait)
-    time.sleep(dynamic_wait) 
+    # Poll for preview iframe instead of 30–120s fixed sleep
+    preview_deadline = time.time() + EMBED_PREVIEW_MAX_SECS
+    while time.time() < preview_deadline:
+        try:
+            if page.locator('div[role="dialog"] iframe').count() > 0:
+                break
+        except Exception:
+            pass
+        time.sleep(0.35)
+    time.sleep(0.4)
 
-    # Click Insert (Wait for it to be active and visible)
     insert_btn = page.locator('div[role="dialog"] div[role="button"]:has-text("Insert")').first
     try:
-        insert_btn.wait_for(state="visible", timeout=20000)
-        time.sleep(2.0)
-        insert_btn.click(force=True, timeout=30000)
+        insert_btn.wait_for(state="visible", timeout=12000)
+        insert_btn.click(force=True, timeout=12000)
     except Exception as e:
-        logger.warning("Insert button error (massive content delay?): %s. Trying Enter key...", e)
+        logger.warning("Insert button: %s — trying Enter", e)
         page.keyboard.press("Enter")
-    
-    # Wait for the widget to appear in the main editor
-    time.sleep(3.5)
-    _smart_wait(page, timeout_ms=5000)
+
+    time.sleep(1.0)
+    _smart_wait(page, timeout_ms=3000)
 
 
 def _embed_resize_target(page):
@@ -1133,62 +1122,32 @@ def _resize_embed_block(page, steps: int):
 
     time.sleep(0.35)
 
-    # Pixel drag scales with content volume (same heuristic as keyboard steps)
-    # Pixel drag scales with content volume. Removed 6200px cap for massive reports.
-    drag_px = max(1300.0, min(120000.0, steps * 2.15))
+    # Mouse-only resize (~10–25s). Avoid 500+ Shift+ArrowDown (was 10+ minutes).
+    drag_px = min(9000.0, max(2200.0, steps * 2.8))
     dx_budget, dx_wide = _viewport_drag_budget(page)
 
     resize_loc = _embed_resize_target(page)
     if resize_loc is not None:
-        # Bottom-centre pulls — vertical height (paragraph visibility)
-        # Reduced to 2 passes for speed; corner drag will do the rest
         for pass_idx in range(2):
-            ok = _drag_bottom_edge_expand(page, resize_loc, drag_px)
-            if ok:
-                logger.info("Embed bottom-edge drag pass %s (~%.0fpx tall)", pass_idx + 1, drag_px)
-            time.sleep(0.2)
+            if _drag_bottom_edge_expand(page, resize_loc, drag_px):
+                logger.info("Embed resize pass %s (~%.0fpx)", pass_idx + 1, drag_px)
+            time.sleep(0.15)
             resize_loc = _embed_resize_target(page)
 
         resize_loc = _embed_resize_target(page)
         if resize_loc is not None:
-            # Bottom-right diagonal — height + width
-            _drag_bottom_right_corner_expand(page, resize_loc, drag_px * 0.85, dx_budget)
-            time.sleep(0.2)
-
-        resize_loc = _embed_resize_target(page)
+            _drag_bottom_right_corner_expand(page, resize_loc, drag_px * 0.75, dx_budget)
+            time.sleep(0.12)
+            resize_loc = _embed_resize_target(page)
         if resize_loc is not None:
-            # Right-mid handle — full-bleed width
             _drag_right_edge_expand(page, resize_loc, dx_wide)
-            time.sleep(0.2)
+            time.sleep(0.12)
 
-    # Secondary: keyboard widen + height
-    time.sleep(0.1)
-    # Fast widen
-    page.keyboard.press("Control+A") # Ensure selected
-    for _ in range(8):
+    page.keyboard.press("Control+A")
+    for _ in range(6):
         page.keyboard.press("ArrowLeft")
-    for _ in range(12):
+    for _ in range(10):
         page.keyboard.press("Shift+ArrowRight")
-
-    # NEW STRATEGY: Multi-drag flicks (MUCH faster than keyboard loop)
-    # Dragging 85k pixels via keyboard takes 15 mins. This takes 10 seconds.
-    logger.info("Executing Hyper-Drag flicks for %s steps...", steps)
-    
-    for flick in range(4): # 4 massive flicks to ensure full expansion
-        resize_loc = _embed_resize_target(page)
-        if resize_loc:
-            # Click and drag down aggressively
-            _drag_bottom_edge_expand(page, resize_loc, 25000)
-            time.sleep(0.5)
-            # Scroll down to let the DOM expand
-            page.mouse.wheel(0, 15000)
-            time.sleep(0.3)
-    
-    # Final fine-tuning (only 500 steps instead of 85k)
-    page.keyboard.down("Shift")
-    for _ in range(500):
-        page.keyboard.press("ArrowDown")
-    page.keyboard.up("Shift")
 
 
 def _click_published_site_dropdown(page) -> bool:
@@ -1461,7 +1420,7 @@ def _harvest_live_site_url(page, entry: SiteEntry, published_slug: str) -> str:
             return ok
 
         now = time.time()
-        if now - last_clipboard_try > 2.5:
+        if now - last_clipboard_try > 1.2:
             _click_first_visible(page, link_selectors, timeout=2500)
             time.sleep(0.5)
             cb = _clipboard_text_async(page)
@@ -1490,11 +1449,16 @@ def _harvest_live_site_url(page, entry: SiteEntry, published_slug: str) -> str:
         except Exception:
             pass
 
-        time.sleep(0.45)
+        time.sleep(0.2)
 
-    for fb in _fallback_urls_for_slug(page, published_slug):
-        # Pass the brand name to ensure we verify the CORRECT site
-        brand = branding_title(entry)
+    brand = branding_title(entry)
+    primary = f"https://sites.google.com/view/{published_slug}/home"
+    if _verify_public_page_loads(page, primary, expected_text=brand):
+        return primary.rstrip("/")
+
+    for fb in _fallback_urls_for_slug(page, published_slug)[:2]:
+        if fb == primary.rstrip("/"):
+            continue
         if _verify_public_page_loads(page, fb, expected_text=brand):
             logger.info("Harvest verified fallback URL: %s", fb)
             return fb.rstrip("/")
@@ -1561,15 +1525,14 @@ def _publish_and_capture_url(page, entry: SiteEntry):
 
     # Ensure dialog is open
     dialog_opened = False
-    for attempt_dlg in range(5):
-        if page.locator('div[role="dialog"]').first.is_visible(timeout=2000):
+    for attempt_dlg in range(3):
+        if page.locator('div[role="dialog"]').first.is_visible(timeout=1500):
             dialog_opened = True
             break
-        # Re-click with increasing force
-        logger.info(f"Publish dialog not open (attempt {attempt_dlg+1}), re-clicking...")
-        _click_first_visible(page, publish_selectors, timeout=3000)
-        page.keyboard.press("Enter") # Sometimes Enter triggers it if button is focused
-        time.sleep(1.5)
+        logger.info("Publish dialog not open (attempt %s), re-clicking...", attempt_dlg + 1)
+        _click_first_visible(page, publish_selectors, timeout=2500)
+        page.keyboard.press("Enter")
+        time.sleep(0.45)
 
     if dialog_opened:
         try:
@@ -1593,8 +1556,7 @@ def _publish_and_capture_url(page, entry: SiteEntry):
                         }
                     }""", {"slug": slug_to_use})
                 
-                # Wait for slug validation (Google's spinner to stop)
-                time.sleep(2.5) 
+                time.sleep(PUBLISH_SLUG_WAIT_SECS)
                 
                 # Check for "already taken" or any other validation warning
                 is_invalid = page.evaluate("""() => {
@@ -1627,13 +1589,12 @@ def _publish_and_capture_url(page, entry: SiteEntry):
                 if not clicked:
                     page.keyboard.press("Enter")
                 
-                time.sleep(1.0)
+                time.sleep(0.35)
 
-                # Wait for dialog to disappear (indicates success)
-                for _ in range(8):
-                    if not dialog.is_visible(timeout=500):
+                for _ in range(6):
+                    if not dialog.is_visible(timeout=400):
                         return True
-                    time.sleep(1.0)
+                    time.sleep(0.35)
                     page.keyboard.press("Enter")
                 return False
                 
@@ -1708,7 +1669,7 @@ def _process_single_entry(page, entry, index, total, batch):
     
     # Ensure editor is ready (very important for background mode)
     _wait_for_editor_ready(page)
-    _smart_wait(page, timeout_ms=12000)
+    _smart_wait(page, timeout_ms=NETWORK_IDLE_MS)
     time.sleep(PAGE_LOAD_SETTLE_SECS)
     _ensure_logged_into_sites(page)
     _dismiss_chrome(page)
@@ -1729,7 +1690,7 @@ def _process_single_entry(page, entry, index, total, batch):
     # 5. Stretch embed so full paragraph/html shows (no inner scrollbar)
     rsteps = resize_steps_for_embed(premium_html)
     logger.info("Resizing embed block (%s steps)", rsteps)
-    time.sleep(1.0) # Settle time for iframe
+    time.sleep(0.35)
     _resize_embed_block(page, rsteps)
     
     # FINAL VERIFICATION: Ensure banner title didn't revert during resizing
