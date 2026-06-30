@@ -853,9 +853,15 @@ def _insert_embed_content(page, premium_html: str):
         'div[role="menuitem"]:has-text("Embed")',
         'div[aria-label="Embed"]',
         '[data-tooltip="Embed" i]',
+        '.RwbRsb:has-text("Embed")',
+        '.d6wSYb:has-text("Embed")',
+        'div[role="button"]:has-text("Embed")',
     ]
     if not _click_first_visible(page, embed_selectors, timeout=8000):
-        raise RuntimeError("Could not find Embed button in Insert panel")
+        try:
+            page.get_by_text("Embed", exact=True).first.click(force=True, timeout=5000)
+        except Exception:
+            raise RuntimeError("Could not find Embed button in Insert panel")
 
     time.sleep(0.35)
 
@@ -1432,7 +1438,7 @@ def _harvest_live_site_url(page, entry: SiteEntry, published_slug: str) -> str:
                         return ok
 
         try:
-            dlg_input = page.locator('div[role="dialog"] input[type="text"]').first
+            dlg_input = page.locator('div[role="dialog"] input, input[readonly], input[value*="sites.google.com"]').first
             if dlg_input.is_visible(timeout=400):
                 raw = dlg_input.input_value()
                 ok = _take_if_valid(raw or "")
